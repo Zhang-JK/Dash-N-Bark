@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ "trunk", "main", "**" ]
+  pull_request:
+    branches: [ "trunk", "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev git php-cli python3 python3-pip libtbb-dev libopus-dev
+
+      - name: Install Composer and PHP deps (if present)
+        run: |
+          if [ -f composer.json ]; then
+            php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+            php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+            composer install --no-interaction --no-progress
+          else
+            echo "No composer.json found, skipping composer step"
+          fi
+
+      - name: Configure CMake
+        run: |
+          mkdir -p build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+
+      - name: Build
+        run: |
+          cd build
+          cmake --build . --config Release -- -j$(nproc)
+
+      - name: Run tests (if any)
+        run: |
+          if [ -f build/CTestTestfile.cmake ]; then
+            cd build
+            ctest --output-on-failure
+          else
+            echo "No tests found"
+          fi
