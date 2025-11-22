@@ -31,7 +31,9 @@ int main() {
     }
 
     uint8_t *robot = nullptr;
+    uint8_t *otto = nullptr;
     size_t robot_size = 0;
+    size_t otto_size = 0;
     std::ifstream input("../testdata/Robot.pcm", std::ios::in | std::ios::binary | std::ios::ate);
     if (input.is_open()) {
         robot_size = input.tellg();
@@ -39,6 +41,41 @@ int main() {
         input.seekg(0, std::ios::beg);
         input.read((char *) robot, robot_size);
         input.close();
+    } else {
+        throw std::runtime_error("Failed to open `../testdata/Robot.pcm`");
+    }
+    std::ifstream input2("../testdata/test.pcm", std::ios::in | std::ios::binary | std::ios::ate);
+    if (input2.is_open()) {
+        otto_size = input2.tellg();
+        otto = new uint8_t[otto_size];
+        input2.seekg(0, std::ios::beg);
+        input2.read((char *) otto, otto_size);
+        input2.close();
+    } else {
+        throw std::runtime_error("Failed to open `../testdata/test.pcm`");
+    }
+    if (otto_size % 4 != 0) {
+        throw std::runtime_error("Invalid PCM file length, must be multiple of 4");
+    }
+
+    uint8_t *mixed = new uint8_t[std::max(robot_size, otto_size)];
+    size_t mixed_size = std::max(robot_size, otto_size);
+    for (size_t i = 0; i < mixed_size / 2; ++i) {
+        int16_t sample1 = 0;
+        int16_t sample2 = 0;
+        if (i * 2 + 1 < robot_size) {
+            sample1 = *(int16_t *)(robot + i * 2);
+        }
+        if (i * 2 + 1 < otto_size) {
+            sample2 = *(int16_t *)(otto + i * 2);
+        }
+        int32_t mixed_sample = static_cast<int32_t>(sample1) + static_cast<int32_t>(sample2);
+        if (mixed_sample > INT16_MAX) {
+            mixed_sample = INT16_MAX;
+        } else if (mixed_sample < INT16_MIN) {
+            mixed_sample = INT16_MIN;
+        }
+        *(int16_t *)(mixed + i * 2) = static_cast<int16_t>(mixed_sample);
     }
 
     /* Setup the bot */
@@ -47,7 +84,7 @@ int main() {
     bot.on_log(dpp::utility::cout_logger());
 
     /* The event is fired when someone issues your commands */
-    bot.on_slashcommand([&bot, robot, robot_size](const dpp::slashcommand_t &event) {
+    bot.on_slashcommand([&bot, robot, robot_size, otto, otto_size, mixed, mixed_size](const dpp::slashcommand_t &event) {
         /* Check which command they ran */
         if (event.command.get_command_name() == "join") {
             /* Get the guild */
@@ -73,6 +110,8 @@ int main() {
 
             /* Tell the bot to play the sound file 'Robot.pcm' in the current voice channel. */
             v->voiceclient->send_audio_raw((uint16_t *) robot, robot_size);
+            v->voiceclient->send_audio_raw((uint16_t *) otto, otto_size);
+            v->voiceclient->send_audio_raw((uint16_t *) mixed, mixed_size);
 
             event.reply("Played robot.");
         }
@@ -91,6 +130,8 @@ int main() {
 
     /* Start bot */
     bot.start(dpp::st_wait);
+
+    delete [] robot;
 
     return 0;
 }
