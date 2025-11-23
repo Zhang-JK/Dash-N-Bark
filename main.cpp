@@ -5,6 +5,7 @@
 #include <dpp/dpp.h>
 #include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>
+#include <Audio-Mixer/AudioMixer.h>
 
 int main() {
     // read token from config.json file
@@ -29,6 +30,10 @@ int main() {
         std::cerr << "Error reading config: " << e.what() << std::endl;
         return 1;
     }
+
+    AudioMixer::AudioClip clip1("../testdata/Robot.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_44K);
+    AudioMixer::AudioClip clip2("../testdata/test.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_44K);
+    auto mixer = AudioMixer::AudioMixer();
 
     uint8_t *robot = nullptr;
     uint8_t *otto = nullptr;
@@ -84,7 +89,7 @@ int main() {
     bot.on_log(dpp::utility::cout_logger());
 
     /* The event is fired when someone issues your commands */
-    bot.on_slashcommand([&bot, robot, robot_size, otto, otto_size, mixed, mixed_size](const dpp::slashcommand_t &event) {
+    bot.on_slashcommand([&bot, robot, robot_size, otto, otto_size, mixed, mixed_size, &mixer, &clip1, &clip2](const dpp::slashcommand_t &event) {
         /* Check which command they ran */
         if (event.command.get_command_name() == "join") {
             /* Get the guild */
@@ -114,6 +119,34 @@ int main() {
             v->voiceclient->send_audio_raw((uint16_t *) mixed, mixed_size);
 
             event.reply("Played robot.");
+        } else if (event.command.get_command_name() == "play111") {
+            /* Get the voice channel the bot is in, in this current guild. */
+            dpp::voiceconn *v = event.from()->get_voice(event.command.guild_id);
+
+            /* If the voice channel was invalid, or there is an issue with it, then tell the user. */
+            if (!v || !v->voiceclient || !v->voiceclient->is_ready()) {
+                event.reply("There was an issue with getting the voice channel. Make sure I'm in a voice channel!");
+                return;
+            }
+
+            // todo: chec
+            mixer.registerAudio(clip1);
+            auto step1 = mixer.step();
+            std::cout << "step1 size" << step1->getSize() << std::endl;
+            v->voiceclient->send_audio_raw((uint16_t *)step1->getData(), step1->getSize());
+            mixer.registerAudio(clip2, 0.5f);
+            auto step2 = mixer.step();
+            std::cout << "step2 size" << step2->getSize() << std::endl;
+            v->voiceclient->send_audio_raw((uint16_t *)step2->getData(), step2->getSize());
+            mixer.registerAudio(clip2, 0.5f);
+            auto step3 = mixer.step();
+            std::cout << "step3 size" << step3->getSize() << std::endl;
+            v->voiceclient->send_audio_raw((uint16_t *)step3->getData(), step3->getSize());
+            while (auto step = mixer.step()) {
+                std::cout << "step size" << step->getSize() << std::endl;
+                v->voiceclient->send_audio_raw((uint16_t *)step->getData(), step->getSize());
+            }
+            event.reply("Played robot.");
         }
     });
 
@@ -124,7 +157,9 @@ int main() {
 
             dpp::slashcommand robotcommand("robot", "Plays a robot noise in your voice channel.", bot.me.id);
 
-            bot.global_bulk_command_create({joincommand, robotcommand});
+            dpp::slashcommand playcommand("play111", "Plays mixed audio in your voice channel.", bot.me.id);
+
+            bot.global_bulk_command_create({joincommand, robotcommand, playcommand});
         }
     });
 

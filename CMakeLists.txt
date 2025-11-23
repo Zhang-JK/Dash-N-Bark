@@ -26,7 +26,10 @@ if (NOT DEFINED OPUS_INCLUDE_DIRS OR OPUS_INCLUDE_DIRS STREQUAL "" OR OPUS_INCLU
 endif()
 message("Found OPUS: ${OPUS_LIBRARIES} in ${OPUS_INCLUDE_DIRS}")
 
+# compile local libs
+add_subdirectory(Audio-Mixer)
+
 # compile main app
 add_executable(${PROJECT_NAME} main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec)
+target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)
