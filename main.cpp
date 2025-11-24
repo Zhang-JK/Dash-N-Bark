@@ -74,7 +74,7 @@ int main() {
         if (i * 2 + 1 < otto_size) {
             sample2 = *(int16_t *)(otto + i * 2);
         }
-        int32_t mixed_sample = static_cast<int32_t>(sample1) + static_cast<int32_t>(sample2);
+        int32_t mixed_sample = (static_cast<int32_t>(sample1) + static_cast<int32_t>(sample2)) / 2;
         if (mixed_sample > INT16_MAX) {
             mixed_sample = INT16_MAX;
         } else if (mixed_sample < INT16_MIN) {
@@ -134,11 +134,11 @@ int main() {
             auto step1 = mixer.step();
             std::cout << "step1 size" << step1->getSize() << std::endl;
             v->voiceclient->send_audio_raw((uint16_t *)step1->getData(), step1->getSize());
-            mixer.registerAudio(clip2, 0.5f);
+            mixer.registerAudio(clip2,0.5f);
             auto step2 = mixer.step();
             std::cout << "step2 size" << step2->getSize() << std::endl;
             v->voiceclient->send_audio_raw((uint16_t *)step2->getData(), step2->getSize());
-            mixer.registerAudio(clip2, 0.5f);
+            mixer.registerAudio(clip2, 1.5f);
             auto step3 = mixer.step();
             std::cout << "step3 size" << step3->getSize() << std::endl;
             v->voiceclient->send_audio_raw((uint16_t *)step3->getData(), step3->getSize());

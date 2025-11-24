@@ -23,36 +23,32 @@ namespace AudioMixer {
         }
 
         AudioBufferPtr output_buffer = std::make_shared<AudioBuffer>(step_size);
-        // auto* buffer_data = reinterpret_cast<uint16_t*>(output_buffer->getDataWritable());
-        auto* buffer_data = output_buffer->getDataWritable();
+        auto* buffer_data = reinterpret_cast<int16_t*>(output_buffer->getDataWritable());
+        std::vector audio_count(step_size / 2, 0.0f);
+        for (auto &reg_audio : audio) {
+            size_t bytes_to_process = std::min(step_size, reg_audio.clip.getSize() - reg_audio.position);
+            size_t samples_to_process = bytes_to_process / 2;
+
+            for (size_t i = 0; i < samples_to_process; ++i) {
+                audio_count[i] += 1.0f;
+            }
+        }
 
         for (auto it = audio.begin(); it != audio.end(); ) {
             RegisteredAudio &reg_audio = *it;
-            const uint8_t* data = reg_audio.clip.getData();
+            auto data = reinterpret_cast<const int16_t *>(reg_audio.clip.getData());
             size_t clip_size = reg_audio.clip.getSize();
 
             size_t bytes_to_process = std::min(step_size, clip_size - reg_audio.position);
-            std::cout << "step_size: " << step_size
-                      << ", clip_size: " << clip_size
-                      << ", position: " << reg_audio.position
-                      << ", bytes_to_process: " << bytes_to_process << std::endl;
-            for (size_t i = 0; i < bytes_to_process; ++i) {
-                // buffer_data[i] = static_cast<uint16_t>(
-                //     std::min(
-                //         static_cast<uint32_t>(buffer_data[i]) +
-                //         static_cast<uint32_t>(
-                //             reinterpret_cast<const uint16_t *>(data)[reg_audio.position / 2 + i] * reg_audio.volume
-                //         ),
-                //         static_cast<uint32_t>(std::numeric_limits<uint16_t>::max() - 10)
-                //     )
-                // );
-                auto mixed_sample = static_cast<uint32_t>(buffer_data[i]) +
-                                   static_cast<uint32_t>(static_cast<float>(data[reg_audio.position + i]));
-                buffer_data[i] = static_cast<uint8_t>(
-                    std::min(
-                        mixed_sample,
-                        static_cast<uint32_t>(std::numeric_limits<uint8_t>::max() - 5)
-                    )
+            size_t samples_to_process = bytes_to_process / 2;
+            for (size_t i = 0; i < samples_to_process; ++i) {
+                auto value = static_cast<float>(buffer_data[i]) +
+                            static_cast<float>(data[reg_audio.position / 2 + i]) *
+                            reg_audio.volume / audio_count[i];
+                buffer_data[i] = static_cast<int16_t>(
+                    std::clamp(value,
+                        static_cast<float>(std::numeric_limits<int16_t>::min()),
+                        static_cast<float>(std::numeric_limits<int16_t>::max()))
                 );
             }
 
