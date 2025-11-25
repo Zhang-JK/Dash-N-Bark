@@ -21,6 +21,7 @@ find_package(TBB REQUIRED COMPONENTS tbb)
 add_subdirectory(libs/DPP)
 add_subdirectory(libs/stdexec)
 add_subdirectory(libs/spdlog)
+add_subdirectory(libs/soci)
 if (NOT DEFINED OPUS_INCLUDE_DIRS OR OPUS_INCLUDE_DIRS STREQUAL "" OR OPUS_INCLUDE_DIRS MATCHES "-NOTFOUND")
     message(FATAL_ERROR "OPUS is needed for voice features: add the opus submodule or call\
     find_package(Opus REQUIRED). OPUS include dirs or libraries not found.")

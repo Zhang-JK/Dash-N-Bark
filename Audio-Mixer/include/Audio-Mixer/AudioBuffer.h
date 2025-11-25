@@ -56,6 +56,8 @@ namespace AudioMixer {
         size_t size;
     };
 
+    typedef std::shared_ptr<AudioClip> AudioClipPtr;
+
 } // namespace AudioMixer
 
 

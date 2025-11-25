@@ -6,8 +6,15 @@
 #include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>
 #include <Audio-Mixer/AudioMixer.h>
+#include "Audio-Mixer/SoundPadManager.h"
 
 int main() {
+    AudioMixer::SoundPadManager spm;
+    if (!spm.initialize("../testdata/soundpad.db", "../testdata/sounds/")) {
+        std::cerr << "Failed to initialize SoundPadManager" << std::endl;
+        return 1;
+    }
+
     // read token from config.json file
     nlohmann::json config;
     std::string token;
@@ -34,6 +41,15 @@ int main() {
     AudioMixer::AudioClip clip1("../testdata/Robot.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_44K);
     AudioMixer::AudioClip clip2("../testdata/test.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_44K);
     auto mixer = AudioMixer::AudioMixer();
+
+    // if (!spm.saveAudioClip(clip1, "Robot", "effect")) {
+    //     std::cerr << "Failed to save audio clip 'Robot'" << std::endl;
+    //     return 1;
+    // }
+    // if (!spm.saveAudioClip(clip2, "说的道理", "电棍", "effect")) {
+    //     std::cerr << "Failed to save audio clip '说的道理'" << std::endl;
+    //     return 1;
+    // }
 
     uint8_t *robot = nullptr;
     uint8_t *otto = nullptr;
@@ -89,7 +105,7 @@ int main() {
     bot.on_log(dpp::utility::cout_logger());
 
     /* The event is fired when someone issues your commands */
-    bot.on_slashcommand([&bot, robot, robot_size, otto, otto_size, mixed, mixed_size, &mixer, &clip1, &clip2](const dpp::slashcommand_t &event) {
+    bot.on_slashcommand([&bot, robot, robot_size, otto, otto_size, mixed, mixed_size, &mixer, &clip1, &clip2, &spm](const dpp::slashcommand_t &event) {
         /* Check which command they ran */
         if (event.command.get_command_name() == "join") {
             /* Get the guild */
@@ -114,9 +130,18 @@ int main() {
             }
 
             /* Tell the bot to play the sound file 'Robot.pcm' in the current voice channel. */
-            v->voiceclient->send_audio_raw((uint16_t *) robot, robot_size);
-            v->voiceclient->send_audio_raw((uint16_t *) otto, otto_size);
-            v->voiceclient->send_audio_raw((uint16_t *) mixed, mixed_size);
+            auto data = spm.loadAudioClip(1);
+            if (!data.has_value()) {
+                event.reply("Failed to load audio clip from database.");
+                return;
+            }
+            v->voiceclient->send_audio_raw((uint16_t *) data.value()->getData(), data.value()->getSize());
+            auto data2 = spm.loadAudioClip("说的道理");
+            if (!data2.has_value()) {
+                event.reply("Failed to load audio clip from database.");
+                return;
+            }
+            v->voiceclient->send_audio_raw((uint16_t *) data2.value()->getData(), data2.value()->getSize());
 
             event.reply("Played robot.");
         } else if (event.command.get_command_name() == "play111") {

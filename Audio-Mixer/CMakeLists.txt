@@ -37,7 +37,7 @@ target_compile_features(audio_mixer PUBLIC cxx_std_20)
 # propagate useful compile options if needed
 target_compile_options(audio_mixer PRIVATE $<$<CONFIG:Debug>:-g> -std=c++20)
 # Link dependencies
-target_link_libraries(audio_mixer spdlog)
+target_link_libraries(audio_mixer spdlog SOCI::SOCI)
 
 # Provide a namespaced alias so external CMake files can easily link to it
 add_library(AudioMixer::audio_mixer ALIAS audio_mixer)
