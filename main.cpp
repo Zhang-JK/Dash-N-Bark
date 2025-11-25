@@ -129,7 +129,6 @@ int main() {
                 return;
             }
 
-            // todo: check broken audio quality
             mixer.registerAudio(clip1);
             auto step1 = mixer.step();
             std::cout << "step1 size" << step1->getSize() << std::endl;

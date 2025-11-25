@@ -3,6 +3,7 @@
 //
 
 #include "Audio-Mixer/AudioMixer.h"
+#include  "spdlog/spdlog.h"
 
 #include <utility>
 #include <vector>
@@ -58,6 +59,10 @@ namespace AudioMixer {
             } else {
                 ++it;
             }
+        }
+
+        if (audio.empty()) {
+            spdlog::info("All audio clips finished.");
         }
 
         return AudioClip(output_buffer);

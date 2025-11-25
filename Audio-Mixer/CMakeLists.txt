@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(Audio-Mixer)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Gather all source and header files under this subdirectory
 file(GLOB_RECURSE AUDIO_MIXER_SOURCES CONFIGURE_DEPENDS
@@ -33,12 +35,9 @@ target_include_directories(audio_mixer
 # Use modern C++ settings (inherit from parent, but ensure at least C++20)
 target_compile_features(audio_mixer PUBLIC cxx_std_20)
 # propagate useful compile options if needed
-target_compile_options(audio_mixer PRIVATE $<$<CONFIG:Debug>:-g>)
-
-# Link OPUS if variables are available (top-level CMake verifies OPUS)
-if(DEFINED OPUS_LIBRARIES AND NOT "${OPUS_LIBRARIES}" STREQUAL "")
-  target_link_libraries(audio_mixer PUBLIC ${OPUS_LIBRARIES})
-endif()
+target_compile_options(audio_mixer PRIVATE $<$<CONFIG:Debug>:-g> -std=c++20)
+# Link dependencies
+target_link_libraries(audio_mixer spdlog)
 
 # Provide a namespaced alias so external CMake files can easily link to it
 add_library(AudioMixer::audio_mixer ALIAS audio_mixer)

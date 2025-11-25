@@ -20,6 +20,7 @@ find_package(TBB REQUIRED COMPONENTS tbb)
 # compile libs
 add_subdirectory(libs/DPP)
 add_subdirectory(libs/stdexec)
+add_subdirectory(libs/spdlog)
 if (NOT DEFINED OPUS_INCLUDE_DIRS OR OPUS_INCLUDE_DIRS STREQUAL "" OR OPUS_INCLUDE_DIRS MATCHES "-NOTFOUND")
     message(FATAL_ERROR "OPUS is needed for voice features: add the opus submodule or call\
     find_package(Opus REQUIRED). OPUS include dirs or libraries not found.")
@@ -31,5 +32,5 @@ add_subdirectory(Audio-Mixer)
 
 # compile main app
 add_executable(${PROJECT_NAME} main.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer)
+target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)
