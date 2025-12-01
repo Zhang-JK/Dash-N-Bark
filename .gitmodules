@@ -10,3 +10,6 @@
 [submodule "libs/soci"]
 	path = libs/soci
 	url = git@github.com:SOCI/soci.git
+[submodule "libs/cpr"]
+	path = libs/cpr
+	url = git@github.com:libcpr/cpr.git

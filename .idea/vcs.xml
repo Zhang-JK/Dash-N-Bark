@@ -2,7 +2,11 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug/_deps/zlib-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/DPP" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/cpr" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/soci" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/spdlog" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/stdexec" vcs="Git" />
   </component>
 </project>

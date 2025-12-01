@@ -7,8 +7,18 @@
 #include <exec/static_thread_pool.hpp>
 #include <Audio-Mixer/AudioMixer.h>
 #include "Audio-Mixer/SoundPadManager.h"
+#include "Stream-Fetch/include/Stream-Fetch/FetchManager.h"
 
 int main() {
+    StreamFetch::FetchManager fetchManager("../testdata/fetch_cache/", 512);
+    auto res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1JB4y1s7Dk/?spm_id_from=333.337.search-card.all.click&vd_source=b7dad825c46d42ec982219d3a5485193");
+    std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
+    res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1eiD6YMEYi?spm_id_from=333.788.player.player_end_recommend_autoplay&vd_source=b7dad825c46d42ec982219d3a5485193&trackid=web_related_0.router-related-2206146-trbxs.1764599384894.20");
+    std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
+    res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1eiD6YMEYi?spm_id_from=333.788.videopod.episodes&vd_source=b7dad825c46d42ec982219d3a5485193&p=2");
+    std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
+    return 0;
+
     AudioMixer::SoundPadManager spm;
     if (!spm.initialize("../testdata/soundpad.db", "../testdata/sounds/")) {
         std::cerr << "Failed to initialize SoundPadManager" << std::endl;
