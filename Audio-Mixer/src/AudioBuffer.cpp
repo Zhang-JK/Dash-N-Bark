@@ -27,7 +27,7 @@ namespace AudioMixer {
     }
 
     AudioBuffer::AudioBuffer(size_t size)
-        : data(new uint8_t[size]), size(size), format(PCM_16BIT_STEREO_44K) {
+        : data(new uint8_t[size]), size(size), format(PCM_16BIT_STEREO_48K) {
         memset(data, 0, size);
     }
 
@@ -53,7 +53,7 @@ namespace AudioMixer {
 
     bool AudioBuffer::checkFormatValidation() const {
         switch (format) {
-            case PCM_16BIT_STEREO_44K:
+            case PCM_16BIT_STEREO_48K:
                 return (size % 4) == 0; // 16-bit stereo means each sample is 4 bytes
             default:
                 return false;

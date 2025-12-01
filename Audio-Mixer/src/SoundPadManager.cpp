@@ -204,7 +204,7 @@ namespace AudioMixer {
             spdlog::error("audio file not found: {}", entry.path);
             return std::nullopt;
         }
-        auto clip = std::make_shared<AudioClip>(entry.path, AudioBuffer::PCM_16BIT_STEREO_44K);
+        auto clip = std::make_shared<AudioClip>(entry.path, AudioBuffer::PCM_16BIT_STEREO_48K);
         if (!clip->getSize() || clip->getSize() % 4 != 0) {
             spdlog::error("invalid audio clip size or format: {}", entry.path);
             return std::nullopt;

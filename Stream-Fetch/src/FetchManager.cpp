@@ -143,9 +143,14 @@ namespace StreamFetch {
     std::optional<std::string> FetchManager::collectAndCache(const std::string &filename,
                                     FetchManager::VideoPlatform platform, const std::string &url) {
         // find if file already exists
+        auto pcm_path = filename.substr(0, filename.find_last_of('.')) + ".pcm";
+        if (std::filesystem::exists(pcm_path)) {
+            spdlog::info("cache hit for file {}", pcm_path);
+            return pcm_path;
+        }
         if (std::filesystem::exists(filename)) {
             spdlog::info("cache hit for file {}", filename);
-            return filename;
+            return convertM4S2PCM(filename);
         }
         // download file
         auto fout = std::ofstream(filename, std::ios::binary);
@@ -185,7 +190,7 @@ namespace StreamFetch {
                     }
                 }
                 fout.close();
-                return filename;
+                return convertM4S2PCM(filename);
             }
             case VideoPlatform::YOUTUBE: {
                 throw std::runtime_error("Not implemented yet");
@@ -194,6 +199,34 @@ namespace StreamFetch {
                 return {};
             }
         }
+    }
+
+    std::optional<std::string> FetchManager::convertM4S2PCM(const std::string &path) {
+        if (!std::filesystem::exists(path)) {
+            spdlog::error("input file does not exist: {}", path);
+            return {};
+        }
+        
+        std::string output_path = path.substr(0, path.find_last_of('.')) + ".pcm";
+        
+        // Use FFmpeg to convert m4s to 16-bit stereo 44100Hz PCM
+        // todo: make sure ffmpeg is installed and in PATH or just use ffmpeg static build
+        std::string ffmpeg_cmd = "ffmpeg -i \"" + path + "\" -quality good -c:a pcm_s16le -f s16le -ar 48000 -ac 2 \"" + output_path + "\" -y";
+        
+        std::string ffmpeg_cmd_silent = ffmpeg_cmd + " > /dev/null 2>&1";
+        int ret = std::system(ffmpeg_cmd_silent.c_str());
+        if (ret != 0) {
+            spdlog::error("ffmpeg conversion failed with exit code: {}", ret);
+            return {};
+        }
+        
+        if (!std::filesystem::exists(output_path)) {
+            spdlog::error("output pcm file was not created: {}", output_path);
+            return {};
+        }
+        
+        spdlog::info("successfully converted {} to PCM", path);
+        return output_path;
     }
 
 

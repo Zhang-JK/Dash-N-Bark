@@ -35,6 +35,7 @@ namespace AudioMixer {
             }
         }
 
+        // todo: sometime can hear glitch, try to fix it later
         for (auto it = audio.begin(); it != audio.end(); ) {
             RegisteredAudio &reg_audio = *it;
             auto data = reinterpret_cast<const int16_t *>(reg_audio.clip.getData());
@@ -47,9 +48,9 @@ namespace AudioMixer {
                             static_cast<float>(data[reg_audio.position / 2 + i]) *
                             reg_audio.volume / audio_count[i];
                 buffer_data[i] = static_cast<int16_t>(
-                    std::clamp(value,
-                        static_cast<float>(std::numeric_limits<int16_t>::min()),
-                        static_cast<float>(std::numeric_limits<int16_t>::max()))
+                    std::clamp(static_cast<int32_t>(value),
+                        static_cast<int32_t>(std::numeric_limits<int16_t>::min()),
+                        static_cast<int32_t>(std::numeric_limits<int16_t>::max()))
                 );
             }
 

@@ -39,7 +39,7 @@ namespace StreamFetch {
         [[nodiscard]] StreamFetchResult saveBilibiliVideo(const std::string &vid, int sub_index) const;
         // StreamFetchResult saveYoutubeVideo(const std::string &vid);
 
-        // static std::optional<std::string> convertM4S2pca(const std::string &path);
+        static std::optional<std::string> convertM4S2PCM(const std::string &path);
         static std::optional<std::string> collectAndCache(const std::string &filename,
                                     VideoPlatform platform, const std::string &url);
 

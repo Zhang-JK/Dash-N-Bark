@@ -13,7 +13,7 @@ namespace AudioMixer {
     class AudioBuffer {
     public:
         enum AudioFormat {
-            PCM_16BIT_STEREO_44K,
+            PCM_16BIT_STEREO_48K,
             // Add more formats as needed
         };
 

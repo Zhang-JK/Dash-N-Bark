@@ -13,11 +13,10 @@ int main() {
     StreamFetch::FetchManager fetchManager("../testdata/fetch_cache/", 512);
     auto res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1JB4y1s7Dk/?spm_id_from=333.337.search-card.all.click&vd_source=b7dad825c46d42ec982219d3a5485193");
     std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
-    res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1eiD6YMEYi?spm_id_from=333.788.player.player_end_recommend_autoplay&vd_source=b7dad825c46d42ec982219d3a5485193&trackid=web_related_0.router-related-2206146-trbxs.1764599384894.20");
-    std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
-    res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1eiD6YMEYi?spm_id_from=333.788.videopod.episodes&vd_source=b7dad825c46d42ec982219d3a5485193&p=2");
-    std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
-    return 0;
+    // res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1VUCRBnEjC?spm_id_from=333.788.recommend_more_video.2&trackid=web_related_0.router-related-2206146-5l4x4.1764599463291.220&vd_source=b7dad825c46d42ec982219d3a5485193");
+    // std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
+    // res = fetchManager.fetchFromURL("https://www.bilibili.com/video/BV1eiD6YMEYi?spm_id_from=333.788.videopod.episodes&vd_source=b7dad825c46d42ec982219d3a5485193&p=2");
+    // std::cout << "Fetch result: " << res.error_code << ", " << res.error_msg << ", " << res.title << ", " << res.duration << ", " << (res.path.has_value() ? res.path.value() : "N/A") << ", " << res.primaryKey << ", " << (res.secondaryKey.has_value() ? res.secondaryKey.value() : "N/A") << std::endl;
 
     AudioMixer::SoundPadManager spm;
     if (!spm.initialize("../testdata/soundpad.db", "../testdata/sounds/")) {
@@ -48,8 +47,8 @@ int main() {
         return 1;
     }
 
-    AudioMixer::AudioClip clip1("../testdata/Robot.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_44K);
-    AudioMixer::AudioClip clip2("../testdata/test.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_44K);
+    AudioMixer::AudioClip clip1("../testdata/Robot.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
+    AudioMixer::AudioClip clip2("../testdata/test.pcm", AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
     auto mixer = AudioMixer::AudioMixer();
 
     // if (!spm.saveAudioClip(clip1, "Robot", "effect")) {
@@ -89,6 +88,19 @@ int main() {
         throw std::runtime_error("Invalid PCM file length, must be multiple of 4");
     }
 
+    uint8_t *daoli111 = nullptr;
+    size_t daoli_size = 0;
+    std::ifstream input3("../testdata/fetch_cache/bilibili_BV1JB4y1s7Dk_747335715.pcm", std::ios::in | std::ios::binary | std::ios::ate);
+    if (input3.is_open()) {
+        daoli_size = input3.tellg();
+        daoli111 = new uint8_t[daoli_size];
+        input3.seekg(0, std::ios::beg);
+        input3.read((char *) daoli111, daoli_size);
+        input3.close();
+    } else {
+        throw std::runtime_error("Failed to open `../testdata/Robot.pcm`");
+    }
+
     uint8_t *mixed = new uint8_t[std::max(robot_size, otto_size)];
     size_t mixed_size = std::max(robot_size, otto_size);
     for (size_t i = 0; i < mixed_size / 2; ++i) {
@@ -115,7 +127,7 @@ int main() {
     bot.on_log(dpp::utility::cout_logger());
 
     /* The event is fired when someone issues your commands */
-    bot.on_slashcommand([&bot, robot, robot_size, otto, otto_size, mixed, mixed_size, &mixer, &clip1, &clip2, &spm](const dpp::slashcommand_t &event) {
+    bot.on_slashcommand([&mixer, &clip1, &clip2, &spm, &res, daoli111, daoli_size](const dpp::slashcommand_t &event) {
         /* Check which command they ran */
         if (event.command.get_command_name() == "join") {
             /* Get the guild */
@@ -164,21 +176,32 @@ int main() {
                 return;
             }
 
-            mixer.registerAudio(clip1);
-            auto step1 = mixer.step();
-            std::cout << "step1 size" << step1->getSize() << std::endl;
-            v->voiceclient->send_audio_raw((uint16_t *)step1->getData(), step1->getSize());
-            mixer.registerAudio(clip2,0.5f);
-            auto step2 = mixer.step();
-            std::cout << "step2 size" << step2->getSize() << std::endl;
-            v->voiceclient->send_audio_raw((uint16_t *)step2->getData(), step2->getSize());
-            mixer.registerAudio(clip2, 1.5f);
-            auto step3 = mixer.step();
-            std::cout << "step3 size" << step3->getSize() << std::endl;
-            v->voiceclient->send_audio_raw((uint16_t *)step3->getData(), step3->getSize());
+            // mixer.registerAudio(clip1);
+            // auto step1 = mixer.step();
+            // std::cout << "step1 size" << step1->getSize() << std::endl;
+            // v->voiceclient->send_audio_raw((uint16_t *)step1->getData(), step1->getSize());
+            // mixer.registerAudio(clip2,0.5f);
+            // auto step2 = mixer.step();
+            // std::cout << "step2 size" << step2->getSize() << std::endl;
+            // v->voiceclient->send_audio_raw((uint16_t *)step2->getData(), step2->getSize());
+            // mixer.registerAudio(clip2, 1.5f);
+            // auto step3 = mixer.step();
+            // std::cout << "step3 size" << step3->getSize() << std::endl;
+            // v->voiceclient->send_audio_raw((uint16_t *)step3->getData(), step3->getSize());
+            // while (auto step = mixer.step()) {
+            //     std::cout << "step size" << step->getSize() << std::endl;
+            //     v->voiceclient->send_audio_raw((uint16_t *)step->getData(), step->getSize());
+            // }
+
+            v->voiceclient->send_audio_raw((uint16_t *)daoli111, daoli_size);
+
+            auto daoli_path = res.path.value();
+            AudioMixer::AudioClip daoli_clip(daoli_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
+            mixer.registerAudio(daoli_clip);
             while (auto step = mixer.step()) {
                 std::cout << "step size" << step->getSize() << std::endl;
                 v->voiceclient->send_audio_raw((uint16_t *)step->getData(), step->getSize());
+                std::this_thread::sleep_for(std::chrono::milliseconds(900));
             }
             event.reply("Played robot.");
         }

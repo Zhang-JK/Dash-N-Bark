@@ -12,10 +12,10 @@
 
 namespace AudioMixer {
 
-    constexpr int SAMPLE_RATE_44K = 44100;
+    constexpr int SAMPLE_RATE_48K = 48000;
     constexpr int CHANNELS_STEREO = 2;
     constexpr int BYTES_PER_SAMPLE_16 = 2;
-    constexpr int BYTES_PER_SEC_DEFAULT = SAMPLE_RATE_44K * CHANNELS_STEREO * BYTES_PER_SAMPLE_16;
+    constexpr int BYTES_PER_SEC_DEFAULT = SAMPLE_RATE_48K * CHANNELS_STEREO * BYTES_PER_SAMPLE_16;
 
     class AudioMixer {
     public:
