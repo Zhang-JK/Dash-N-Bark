@@ -20,7 +20,7 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev git php-cli python3 python3-pip libtbb-dev libopus-dev
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev git php-cli python3 python3-pip libtbb-dev libopus-dev meson
 
       - name: Install Composer and PHP deps (if present)
         run: |
@@ -51,3 +51,23 @@ jobs:
           else
             echo "No tests found"
           fi
+
+      - name: Deploy (if on trunk)
+        if: github.ref == 'refs/heads/trunk'
+        run: |
+          echo "Deploying application..."
+          # Install SSH key
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HOST_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Copy files to server
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r build/* ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }}:~/deploys/Dash-N-Bark/
+
+          # Kill previous instance, wait, and start new one
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF'
+            pkill -f Dash-N-Bark || true
+            sleep 60
+            cd ~/deploys/Dash-N-Bark
+            nohup ./Dash-N-Bark > "output_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
+          EOF
