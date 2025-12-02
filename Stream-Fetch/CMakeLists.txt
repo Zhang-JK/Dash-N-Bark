@@ -35,7 +35,7 @@ target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_20)
 # propagate useful compile options if needed
 target_compile_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:-g> -std=c++20)
 # Link dependencies
-target_link_libraries(${PROJECT_NAME} spdlog cpr::cpr)
+target_link_libraries(${PROJECT_NAME} spdlog cpr::cpr nlohmann_json)
 
 # Provide a namespaced alias so external CMake files can easily link to it
 add_library(stream_fetch ALIAS ${PROJECT_NAME})
