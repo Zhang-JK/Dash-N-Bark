@@ -19,24 +19,23 @@ if(NOT PROJECT_LOCAL_SOURCES)
     message(WARNING "${PROJECT_NAME}: No source files found in ${CMAKE_CURRENT_SOURCE_DIR}/src")
 endif()
 
-add_library(${PROJECT_NAME}
+add_library(stream_fetch
         ${PROJECT_LOCAL_SOURCES}
         ${PROJECT_LOCAL_HEADERS}
 )
 
-target_include_directories(${PROJECT_NAME}
+target_include_directories(stream_fetch
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
 
 # Use modern C++ settings (inherit from parent, but ensure at least C++20)
-target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_20)
+target_compile_features(stream_fetch PUBLIC cxx_std_20)
 # propagate useful compile options if needed
-target_compile_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Debug>:-g> -std=c++20)
+target_compile_options(stream_fetch PRIVATE $<$<CONFIG:Debug>:-g> -std=c++20)
 # Link dependencies
-target_link_libraries(${PROJECT_NAME} spdlog cpr::cpr nlohmann_json::nlohmann_json)
+target_link_libraries(stream_fetch spdlog cpr::cpr nlohmann_json::nlohmann_json)
 
 # Provide a namespaced alias so external CMake files can easily link to it
-add_library(stream_fetch ALIAS ${PROJECT_NAME})
-add_library(StreamFetch::stream_fetch ALIAS ${PROJECT_NAME})
+add_library(StreamFetch::stream_fetch ALIAS stream_fetch)

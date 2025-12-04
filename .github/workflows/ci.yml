@@ -42,6 +42,8 @@ jobs:
         run: |
           cd build
           cmake --build . --config Release -- -j$(nproc)
+          mkdir install
+          cmake --install . --prefix install
 
       - name: Run tests (if any)
         run: |
@@ -56,26 +58,26 @@ jobs:
         if: github.ref == 'refs/heads/trunk'
         run: |
           echo "Deploying application..."
-                # Install SSH key
-                mkdir -p ~/.ssh
-                echo "${{ secrets.HOST_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-                chmod 600 ~/.ssh/deploy_key
+          # Install SSH key
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HOST_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
 
-                # Create zip with only necessary files
-                cd build
-                zip -r deploy.zip Dash-N-Bark
-                ls -lh deploy.zip
-                cd ..
+          # Create zip with only necessary files
+          cd build/install
+          zip -r deploy.zip .
+          ls -lh deploy.zip
 
-                # Copy zip to server
-                scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no build/deploy.zip ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }}:~/deploys/Dash-N-Bark/
+          # Copy zip to server
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no deploy.zip ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }}:~/deploys/Dash-N-Bark/
 
-                # Kill previous instance, extract, and start new one
-                ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF'
-                pkill -f Dash-N-Bark || true
-                sleep 60
-                cd ~/deploys/Dash-N-Bark
-                unzip -o deploy.zip
-                rm deploy.zip
-                nohup ./Dash-N-Bark > "output_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
-                EOF
+          # Kill previous instance, extract, and start new one
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF'
+            pkill -f Dash-N-Bark || true
+            sleep 60
+            cd ~/deploys/Dash-N-Bark
+            unzip -o deploy.zip
+            rm deploy.zip
+            mkdir -p logs
+            nohup ./bin/Dash-N-Bark > "logs/output_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
+          EOF
