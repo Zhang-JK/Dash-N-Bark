@@ -8,12 +8,8 @@
 
 #include <dpp/dpp.h>
 #include <spdlog/spdlog.h>
-#include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>
 #include <nlohmann/json.hpp>
-#include "Audio-Mixer/AudioMixer.h"
-#include "Audio-Mixer/SoundPadManager.h"
-#include "Stream-Fetch/include/Stream-Fetch/FetchManager.h"
 
 #include "BotRouter.h"
 

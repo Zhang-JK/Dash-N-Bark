@@ -36,7 +36,12 @@ add_subdirectory(Audio-Mixer)
 add_subdirectory(Stream-Fetch)
 
 # compile main app
-add_executable(${PROJECT_NAME} main.cpp BotRouter.cpp)
+add_executable(${PROJECT_NAME}
+        main.cpp
+        BotRouter.cpp
+        ToolInterface.cpp
+        Commands/CommandBase.h
+)
 target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)
 
