@@ -7,9 +7,13 @@
 
 #include <dpp/dpp.h>
 
+#include "ToolInterface.h"
+#include "Commands/CommandBase.h"
+#include "Commands/JoinCommand.h"
+
 class BotRouter {
 public:
-    BotRouter(std::string botToken);
+    BotRouter(const std::string& botToken, const std::string& workDir);
     BotRouter() = delete;
     ~BotRouter();
     void start();
@@ -21,7 +25,8 @@ private:
     std::string botToken_;
     std::shared_ptr<dpp::cluster> pbot_;
     std::map<std::string, std::tuple<dpp::slashcommand,
-        std::optional<std::function<void(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster>)>>>> cmds_;
+        std::optional<CommandBase*>>> cmds_;
+    std::shared_ptr<ToolInterface> tool_;
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H

@@ -17,9 +17,10 @@ public:
     ToolInterface(const std::string& base);
     ~ToolInterface();
 
+    int playAudioFromFile(const std::string& file_path);
     int fetchAndEnqueuePlaylist(const std::string& url);
 
-    std::optional<AudioMixer::AudioClip> stepAudioMixer() const;
+    [[nodiscard]] std::optional<AudioMixer::AudioClip> stepAudioMixer() const;
 
 private:
     std::string base_path_;

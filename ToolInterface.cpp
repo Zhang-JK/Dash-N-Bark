@@ -32,6 +32,14 @@ int ToolInterface::fetchAndEnqueuePlaylist(const std::string& url)
     return 0;
 }
 
+int ToolInterface::playAudioFromFile(const std::string& file_path)
+{
+    auto real_path = base_path_ + "/" + file_path;
+    AudioMixer::AudioClip clip(real_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
+    audio_mixer_->registerAudio(clip);
+    return 0;
+}
+
 std::optional<AudioMixer::AudioClip> ToolInterface::stepAudioMixer() const
 {
     return audio_mixer_->step();

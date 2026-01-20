@@ -6,6 +6,8 @@
 
 #include "BotRouter.h"
 
+#include "Commands/JoinCommand.h"
+
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
     return [](const dpp::log_t& event) {
@@ -34,13 +36,14 @@ std::function<void(const dpp::log_t&)> spdlog_logger() {
     };
 }
 
-BotRouter::BotRouter(std::string botToken)
+BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     : botToken_(std::move(botToken)),
       pbot_(std::make_shared<dpp::cluster>(botToken_)) {
     pbot_->on_log(spdlog_logger());
     this->setCmds();
     pbot_->on_ready(this->getRegisterCmdFunction());
     pbot_->on_slashcommand(this->getCmdRouterFunction());
+    tool_ = std::make_shared<ToolInterface>(workDir);
 }
 
 BotRouter::~BotRouter() {
@@ -67,7 +70,7 @@ void BotRouter::setCmds() {
     cmds_["join"] = std::make_tuple(
         dpp::slashcommand("join", "Joins your voice channel.", pbot_->me.id)
             .add_localization("zh-CN", "加入", "加入你所在的语音频道。"),
-        std::nullopt
+        new JoinCommand(tool_)
     );
     cmds_["leave"] = std::make_tuple(
         dpp::slashcommand("leave", "Leaves the voice channel.", pbot_->me.id)
@@ -89,40 +92,40 @@ void BotRouter::setCmds() {
             ),
         std::nullopt
     );
-    cmds_["add"] = std::make_tuple(
-        dpp::slashcommand("add", "Add a clip to soundpad", pbot_->me.id)
-            .add_localization("zh-CN", "添加", "添加音频片段到音效板。")
-            .add_option(
-                dpp::command_option(dpp::co_string, "url", "Video URL to be clipped", true)
-                    .add_localization("zh-CN", "链接", "要剪辑的视频链接")
-            )
-            .add_option(
-                dpp::command_option(dpp::co_string, "start", "Clip start time (x:xx or xxx seconds)", true)
-                    .add_localization("zh-CN", "起始时间", "片段起始时间 (x:xx 或 xxx 秒)")
-            )
-            .add_option(
-                dpp::command_option(dpp::co_string, "end", "Clip end time (x:xx or xxx seconds)", true)
-                    .add_localization("zh-CN", "结束时间", "片段结束时间 (x:xx 或 xxx 秒)")
-            )
-            .add_option(
-                dpp::command_option(dpp::co_string, "tag1", "First tag for the clip", false)
-                    .add_localization("zh-CN", "标签1", "片段的第一个标签")
-            )
-            .add_option(
-                dpp::command_option(dpp::co_string, "tag2", "Second tag for the clip", false)
-                    .add_localization("zh-CN", "标签2", "片段的第二个标签")
-            )
-            .add_option(
-                dpp::command_option(dpp::co_boolean, "pin", "Pin the clip to top page", false)
-                    .add_localization("zh-CN", "置顶", "将片段置顶到首页")
-            ),
-        std::nullopt
-    );
-    cmds_["soundpad"] = std::make_tuple(
-        dpp::slashcommand("soundpad", "Play soundpad effects.", pbot_->me.id)
-            .add_localization("zh-CN", "音效板", "播放音效板效果。"),
-        std::nullopt
-    );
+    // cmds_["add"] = std::make_tuple(
+    //     dpp::slashcommand("add", "Add a clip to soundpad", pbot_->me.id)
+    //         .add_localization("zh-CN", "添加", "添加音频片段到音效板。")
+    //         .add_option(
+    //             dpp::command_option(dpp::co_string, "url", "Video URL to be clipped", true)
+    //                 .add_localization("zh-CN", "链接", "要剪辑的视频链接")
+    //         )
+    //         .add_option(
+    //             dpp::command_option(dpp::co_string, "start", "Clip start time (x:xx or xxx seconds)", true)
+    //                 .add_localization("zh-CN", "起始时间", "片段起始时间 (x:xx 或 xxx 秒)")
+    //         )
+    //         .add_option(
+    //             dpp::command_option(dpp::co_string, "end", "Clip end time (x:xx or xxx seconds)", true)
+    //                 .add_localization("zh-CN", "结束时间", "片段结束时间 (x:xx 或 xxx 秒)")
+    //         )
+    //         .add_option(
+    //             dpp::command_option(dpp::co_string, "tag1", "First tag for the clip", false)
+    //                 .add_localization("zh-CN", "标签1", "片段的第一个标签")
+    //         )
+    //         .add_option(
+    //             dpp::command_option(dpp::co_string, "tag2", "Second tag for the clip", false)
+    //                 .add_localization("zh-CN", "标签2", "片段的第二个标签")
+    //         )
+    //         .add_option(
+    //             dpp::command_option(dpp::co_boolean, "pin", "Pin the clip to top page", false)
+    //                 .add_localization("zh-CN", "置顶", "将片段置顶到首页")
+    //         ),
+    //     std::nullopt
+    // );
+    // cmds_["soundpad"] = std::make_tuple(
+    //     dpp::slashcommand("soundpad", "Play soundpad effects.", pbot_->me.id)
+    //         .add_localization("zh-CN", "音效板", "播放音效板效果。"),
+    //     std::nullopt
+    // );
     // cmds_["parrot"] = std::make_tuple(
     //     dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
     //         .add_localization("zh-CN", "复读", "重复你的消息。"),
@@ -174,7 +177,7 @@ auto BotRouter::getCmdRouterFunction() -> std::function<void(const dpp::slashcom
             const auto& [_, handler_opt] = it->second;
             if (handler_opt.has_value()) {
                 const auto& handler = handler_opt.value();
-                handler(event, local_bot);
+                handler->execute(event, local_bot);
             } else {
                 spdlog::warn("No handler defined for command: {}", cmd_name);
                 event.reply("This command is not yet implemented.");
