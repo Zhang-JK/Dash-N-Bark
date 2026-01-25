@@ -9,7 +9,7 @@
 
 #include "ToolInterface.h"
 #include "Commands/CommandBase.h"
-#include "Commands/JoinCommand.h"
+#include "exec/static_thread_pool.hpp"
 
 class BotRouter {
 public:
@@ -27,6 +27,7 @@ private:
     std::map<std::string, std::tuple<dpp::slashcommand,
         std::optional<CommandBase*>>> cmds_;
     std::shared_ptr<ToolInterface> tool_;
+
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H

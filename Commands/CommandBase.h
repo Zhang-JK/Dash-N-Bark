@@ -7,12 +7,15 @@
 #include <memory>
 
 #include <dpp/dpp.h>
+#include <spdlog/spdlog.h>
 #include "../ToolInterface.h"
 
 class CommandBase {
 public:
     explicit CommandBase(std::shared_ptr<ToolInterface> tool_interface)
-        : tool_interface_(std::move(tool_interface)) {}
+        : tool_interface_(std::move(tool_interface)) {
+        assert(tool_interface_ != nullptr && "ToolInterface pointer cannot be nullCommandBase()");
+    }
 
     virtual ~CommandBase() = default;
 
@@ -21,7 +24,7 @@ public:
     void operator()(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) {
         execute(event, std::move(bot));
     }
-private:
+protected:
     std::shared_ptr<ToolInterface> tool_interface_;
 };
 

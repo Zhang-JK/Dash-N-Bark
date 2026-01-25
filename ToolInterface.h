@@ -17,8 +17,16 @@ public:
     ToolInterface(const std::string& base);
     ~ToolInterface();
 
-    int playAudioFromFile(const std::string& file_path);
-    int fetchAndEnqueuePlaylist(const std::string& url);
+    template<typename T = std::optional<std::string>>
+    struct ToolInvokeResult {
+        bool success;
+        int error_code;
+        std::string message;
+        T data;
+    };
+
+    ToolInvokeResult<> playAudioFromFile(const std::string& file_path);
+    ToolInvokeResult<> fetchAndEnqueuePlaylist(const std::string& url);
 
     [[nodiscard]] std::optional<AudioMixer::AudioClip> stepAudioMixer() const;
 

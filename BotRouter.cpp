@@ -8,6 +8,7 @@
 
 #include "Commands/JoinCommand.h"
 #include "Commands/LeaveCommand.h"
+#include "Commands/StreamCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -41,10 +42,11 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     : botToken_(std::move(botToken)),
       pbot_(std::make_shared<dpp::cluster>(botToken_)) {
     pbot_->on_log(spdlog_logger());
+    tool_ = std::make_shared<ToolInterface>(workDir);
+
     this->setCmds();
     pbot_->on_ready(this->getRegisterCmdFunction());
     pbot_->on_slashcommand(this->getCmdRouterFunction());
-    tool_ = std::make_shared<ToolInterface>(workDir);
 }
 
 BotRouter::~BotRouter() {
@@ -91,7 +93,7 @@ void BotRouter::setCmds() {
                     .set_min_value(1)
                     .set_max_value(100)
             ),
-        std::nullopt
+            new StreamCommand(tool_)
     );
     // cmds_["add"] = std::make_tuple(
     //     dpp::slashcommand("add", "Add a clip to soundpad", pbot_->me.id)
