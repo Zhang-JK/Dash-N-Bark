@@ -26,9 +26,9 @@ public:
     };
 
     ToolInvokeResult<> playAudioFromFile(const std::string& file_path);
-    ToolInvokeResult<> fetchAndEnqueuePlaylist(const std::string& url);
+    ToolInvokeResult<StreamFetch::FetchManager::StreamFetchResult> fetchAudioFromUrl(const std::string& url);
 
-    [[nodiscard]] std::optional<AudioMixer::AudioClip> stepAudioMixer() const;
+    [[nodiscard]] std::optional<AudioMixer::AudioClip> stepAudioMixer(size_t step_size) const;
 
 private:
     std::string base_path_;

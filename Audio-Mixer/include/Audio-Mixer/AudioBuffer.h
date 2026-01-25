@@ -22,7 +22,7 @@ namespace AudioMixer {
         ~AudioBuffer();
 
         [[nodiscard]] bool isValid() const;
-        [[nodiscard]] const uint8_t* getData() const;
+        [[nodiscard]] uint8_t* getData();
         [[nodiscard]] size_t getSize() const;
     private:
         // audio info
@@ -45,7 +45,7 @@ namespace AudioMixer {
         AudioClip(const AudioBufferPtr& buffer, size_t start, size_t size);
         AudioClip(const AudioClip& clip, size_t start, size_t size);
 
-        [[nodiscard]] const uint8_t* getData() const;
+        [[nodiscard]] uint8_t* getData();
         [[nodiscard]] size_t getSize() const;
 
         [[nodiscard]] AudioClip subClip(size_t start_sub, size_t size_sub) const;

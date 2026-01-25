@@ -9,7 +9,10 @@
 
 #include "ToolInterface.h"
 #include "Commands/CommandBase.h"
-#include "exec/static_thread_pool.hpp"
+#include <stdexec/execution.hpp>
+#include <exec/static_thread_pool.hpp>
+
+namespace ex = stdexec;
 
 class BotRouter {
 public:
@@ -17,6 +20,7 @@ public:
     BotRouter() = delete;
     ~BotRouter();
     void start();
+    void startBgTask();
     void setCmds();
     auto getRegisterCmdFunction() -> std::function<void(const dpp::ready_t &event)>;
     auto getCmdRouterFunction() -> std::function<void(const dpp::slashcommand_t &event)>;
@@ -28,6 +32,9 @@ private:
         std::optional<CommandBase*>>> cmds_;
     std::shared_ptr<ToolInterface> tool_;
 
+    exec::static_thread_pool pool_{4};
+    std::stop_source stop_src_;
+    int bg_task_cycle_ms_ = 100;
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H

@@ -39,7 +39,7 @@ namespace AudioMixer {
         return data != nullptr && size > 0;
     }
 
-    const uint8_t* AudioBuffer::getData() const {
+    uint8_t* AudioBuffer::getData() {
         return data;
     }
 
@@ -84,7 +84,7 @@ namespace AudioMixer {
         }
     }
 
-    const uint8_t* AudioClip::getData() const {
+    uint8_t* AudioClip::getData() {
         return buffer->getData() + start;
     }
 

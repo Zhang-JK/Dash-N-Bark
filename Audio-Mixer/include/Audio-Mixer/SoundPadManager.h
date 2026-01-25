@@ -29,7 +29,7 @@ namespace AudioMixer {
         bool initialize(const std::string& db_path="soundpad.db", const std::string& sound_path="./sounds/");
         void shutdown();
 
-        [[nodiscard]] bool saveAudioClip(const AudioClip& clip, const std::string& name,
+        [[nodiscard]] bool saveAudioClip(AudioClip& clip, const std::string& name,
             const std::string& tag1, const std::string& tag2="", bool fav=false) const;
         std::optional<AudioClipPtr> loadAudioClip(int id) const;
         std::optional<AudioClipPtr> loadAudioClip(const std::string& name) const;

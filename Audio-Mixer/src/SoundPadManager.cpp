@@ -96,7 +96,7 @@ namespace AudioMixer {
         }
     }
 
-    bool SoundPadManager::saveAudioClip(const AudioClip& clip, const std::string& name,
+    bool SoundPadManager::saveAudioClip(AudioClip& clip, const std::string& name,
             const std::string& tag1, const std::string& tag2, bool fav) const {
         if (!sql) {
             spdlog::error("SoundPadManager not initialized");

@@ -55,6 +55,7 @@ int main() {
 
     spdlog::info("Launching bot...");
     BotRouter botRouter(token, GLOBAL_WORKING_DIR);
+    botRouter.startBgTask();
     botRouter.start();
 
     return 0;

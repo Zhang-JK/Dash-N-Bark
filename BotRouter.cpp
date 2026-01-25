@@ -51,6 +51,11 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
 
 BotRouter::~BotRouter() {
     std::weak_ptr weak_monitor = pbot_;
+    if (stop_src_.request_stop()) {
+        spdlog::info("Stop signal sent to background tasks.");
+    } else {
+        spdlog::warn("Failed to send stop signal to background tasks.");
+    }
     pbot_.reset();
     auto start_time = std::chrono::steady_clock::now();
     while (!weak_monitor.expired()) {
@@ -65,8 +70,35 @@ BotRouter::~BotRouter() {
     }
 }
 
+void BotRouter::startBgTask() {
+    // auto bg_ticker = ex::schedule(pool_.get_scheduler())
+    //     | ex::let_value([this, token = stop_src_.get_token()]() mutable {
+    //         // Return a sender that performs the loop
+    //         return ex::just() | ex::then([this, token]() {
+    //             auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000; // cycle_ms * sample_rate * bytes_per_sample * channels
+    //             while (!token.stop_requested()) {
+    //                 std::this_thread::sleep_for(std::chrono::milliseconds(bg_task_cycle_ms_ - 5));
+    //                 if (token.stop_requested()) break;
+    //                 // auto audio = tool_->stepAudioMixer(step_size);
+    //                 // if (audio) {
+    //                 //     pbot_->voice_send_audio_raw(tool_->getCurrentVoiceConnectionGuildId(), std::move(audio));
+    //                 // }
+    //             }
+    //             spdlog::debug("[Ticker] Cleaning up and stopping.");
+    //         });
+    //     });
+    //
+    // ex::start_detached(std::move(bg_ticker));
+}
+
 void BotRouter::start() {
-    pbot_->start(dpp::st_wait);
+    try {
+        pbot_->start(dpp::st_wait);
+    } catch (const std::exception& e) {
+        spdlog::info("Bot shutdown requested or exception occurred: {}", e.what());
+    } catch (...) {
+        spdlog::info("Bot shutdown requested or unknown exception occurred.");
+    }
 }
 
 void BotRouter::setCmds() {
