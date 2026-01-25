@@ -34,7 +34,7 @@ private:
 
     exec::static_thread_pool pool_{4};
     std::stop_source stop_src_;
-    int bg_task_cycle_ms_ = 100;
+    int bg_task_cycle_ms_ = 60;
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H

@@ -71,24 +71,73 @@ BotRouter::~BotRouter() {
 }
 
 void BotRouter::startBgTask() {
-    // auto bg_ticker = ex::schedule(pool_.get_scheduler())
-    //     | ex::let_value([this, token = stop_src_.get_token()]() mutable {
-    //         // Return a sender that performs the loop
-    //         return ex::just() | ex::then([this, token]() {
-    //             auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000; // cycle_ms * sample_rate * bytes_per_sample * channels
-    //             while (!token.stop_requested()) {
-    //                 std::this_thread::sleep_for(std::chrono::milliseconds(bg_task_cycle_ms_ - 5));
-    //                 if (token.stop_requested()) break;
-    //                 // auto audio = tool_->stepAudioMixer(step_size);
-    //                 // if (audio) {
-    //                 //     pbot_->voice_send_audio_raw(tool_->getCurrentVoiceConnectionGuildId(), std::move(audio));
-    //                 // }
-    //             }
-    //             spdlog::debug("[Ticker] Cleaning up and stopping.");
-    //         });
-    //     });
-    //
-    // ex::start_detached(std::move(bg_ticker));
+    auto bg_ticker = ex::schedule(pool_.get_scheduler())
+        | ex::let_value([this, token = stop_src_.get_token()]() mutable {
+            // Return a sender that performs the loop
+            return ex::just() | ex::then([this, token]() {
+                dpp::discord_voice_client* client = nullptr;
+                pbot_->on_voice_ready([&client](const dpp::voice_ready_t& event) {
+                    spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
+                    client = event.voice_client;
+                });
+                pbot_->on_voice_state_update([](const dpp::voice_state_update_t& event) {
+                    spdlog::debug("on_voice_state_update triggered for user {}", event.state.user_id);
+                });
+                pbot_->on_voice_server_update([](const dpp::voice_server_update_t& event) {
+                    spdlog::debug("on_voice_server_update triggered for guild {}", event.guild_id);
+                });
+                auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000; // cycle_ms * sample_rate * bytes_per_sample * channels
+                static double smoothed_us = 0.0;
+                while (!token.stop_requested()) {
+                    if (token.stop_requested()) break;
+                    auto sleep_time = std::chrono::microseconds((bg_task_cycle_ms_*1000*2));
+                    try {
+                        if (client && client->is_connected() && client->is_ready()) {
+                            auto local_start_time = std::chrono::steady_clock::now();
+                            auto audio = tool_->stepAudioMixer(step_size);
+                            if (audio) {
+                                // todo: crash when disconnect
+                                client->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
+                            }
+                            auto elapsed_time = std::chrono::steady_clock::now() - local_start_time;
+                            // Smoothed elapsed time (exponential moving average in microseconds)
+                            constexpr double alpha = 0.2; // smoothing factor (0..1): larger = more responsive
+                            auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time).count();
+                            if (smoothed_us == 0.0) smoothed_us = static_cast<double>(elapsed_us);
+                            smoothed_us = alpha * static_cast<double>(elapsed_us) + (1.0 - alpha) * smoothed_us;
+                            // with bias
+                            auto smoothed_elapsed = std::chrono::microseconds(static_cast<long long>(smoothed_us)) + std::chrono::microseconds(200);
+
+                            // compute sleep time (ensure non-negative)
+                            auto target_us = std::chrono::microseconds(bg_task_cycle_ms_ * 1000);
+                            sleep_time = (target_us > std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time))
+                                ? (target_us - std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time))
+                                : std::chrono::microseconds(0);
+
+                            spdlog::debug("bg task cycle time: {}us (smoothed: {}us)", elapsed_us, smoothed_elapsed.count());
+                            std::this_thread::sleep_for(sleep_time);
+                            continue;
+                        }
+                    } catch (const dpp::voice_exception& e) {
+                        spdlog::error("dpp voice exception in bg task: {}", e.what());
+                        client = nullptr;
+                    } catch (const dpp::exception& e) {
+                        spdlog::error("voice exception in bg task: {}", e.what());
+                        client = nullptr;
+                    } catch (const std::exception& e) {
+                        spdlog::error("Standard exception in bg task: {}", e.what());
+                        client = nullptr;
+                    } catch (...) {
+                        spdlog::error("Unknown exception in bg task.");
+                        client = nullptr;
+                    }
+                    std::this_thread::sleep_for(sleep_time);
+                }
+                spdlog::debug("[Ticker] Cleaning up and stopping.");
+            });
+        });
+
+    ex::start_detached(std::move(bg_ticker));
 }
 
 void BotRouter::start() {
