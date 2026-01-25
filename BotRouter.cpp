@@ -7,6 +7,7 @@
 #include "BotRouter.h"
 
 #include "Commands/JoinCommand.h"
+#include "Commands/LeaveCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -75,7 +76,7 @@ void BotRouter::setCmds() {
     cmds_["leave"] = std::make_tuple(
         dpp::slashcommand("leave", "Leaves the voice channel.", pbot_->me.id)
             .add_localization("zh-CN", "离开", "离开当前语音频道。"),
-        std::nullopt
+        new LeaveCommand(tool_)
     );
     cmds_["stream"] = std::make_tuple(
         dpp::slashcommand("stream", "Stream audio from Youtube or Bilibili.", pbot_->me.id)
