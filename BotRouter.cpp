@@ -87,7 +87,8 @@ void BotRouter::startBgTask() {
                     spdlog::debug("on_voice_server_update triggered for guild {}", event.guild_id);
                 });
                 auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000; // cycle_ms * sample_rate * bytes_per_sample * channels
-                static double smoothed_us = 0.0;
+                auto last_elapsed_time = std::chrono::microseconds(0);
+                bool init = true;
                 while (!token.stop_requested()) {
                     if (token.stop_requested()) break;
                     auto sleep_time = std::chrono::microseconds((bg_task_cycle_ms_*1000*2));
@@ -98,29 +99,23 @@ void BotRouter::startBgTask() {
                             if (audio) {
                                 // todo: crash when disconnect
                                 client->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
-                            }
-                            auto elapsed_time = std::chrono::steady_clock::now() - local_start_time;
-                            // Smoothed elapsed time (exponential moving average in microseconds)
-                            constexpr double alpha = 0.2; // smoothing factor (0..1): larger = more responsive
-                            auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time).count();
-                            bool init = false;
-                            if (smoothed_us == 0.0) {
-                                smoothed_us = static_cast<double>(elapsed_us);
+                            } else {
                                 init = true;
                             }
-                            smoothed_us = alpha * static_cast<double>(elapsed_us) + (1.0 - alpha) * smoothed_us;
-                            // with bias
-                            auto smoothed_elapsed = std::chrono::microseconds(static_cast<long long>(smoothed_us)) + std::chrono::microseconds(300);
 
                             // compute sleep time (ensure non-negative)
                             auto target_us = std::chrono::microseconds(bg_task_cycle_ms_ * 1000);
                             if (init) {
-                                sleep_time = std::chrono::microseconds(std::chrono::microseconds((bg_task_cycle_ms_*1000/10)));
+                                sleep_time = std::chrono::microseconds(std::chrono::microseconds((bg_task_cycle_ms_*1000/5)));
+                                init = false;
                             } else {
-                                sleep_time = (target_us > std::chrono::duration_cast<std::chrono::microseconds>(smoothed_elapsed))
-                                    ? (target_us - std::chrono::duration_cast<std::chrono::microseconds>(smoothed_elapsed))
+                                sleep_time = (target_us > last_elapsed_time)
+                                    ? (target_us - last_elapsed_time)
                                     : std::chrono::microseconds(0);
                             }
+                            // todo: add real timestamp check
+                            last_elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - local_start_time);
+                            last_elapsed_time = last_elapsed_time+std::chrono::microseconds(120); // adjust for sleep overhead
                         }
                     } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
