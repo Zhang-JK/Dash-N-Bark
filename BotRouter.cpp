@@ -103,20 +103,24 @@ void BotRouter::startBgTask() {
                             // Smoothed elapsed time (exponential moving average in microseconds)
                             constexpr double alpha = 0.2; // smoothing factor (0..1): larger = more responsive
                             auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time).count();
-                            if (smoothed_us == 0.0) smoothed_us = static_cast<double>(elapsed_us);
+                            bool init = false;
+                            if (smoothed_us == 0.0) {
+                                smoothed_us = static_cast<double>(elapsed_us);
+                                init = true;
+                            }
                             smoothed_us = alpha * static_cast<double>(elapsed_us) + (1.0 - alpha) * smoothed_us;
                             // with bias
-                            auto smoothed_elapsed = std::chrono::microseconds(static_cast<long long>(smoothed_us)) + std::chrono::microseconds(200);
+                            auto smoothed_elapsed = std::chrono::microseconds(static_cast<long long>(smoothed_us)) + std::chrono::microseconds(300);
 
                             // compute sleep time (ensure non-negative)
                             auto target_us = std::chrono::microseconds(bg_task_cycle_ms_ * 1000);
-                            sleep_time = (target_us > std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time))
-                                ? (target_us - std::chrono::duration_cast<std::chrono::microseconds>(elapsed_time))
-                                : std::chrono::microseconds(0);
-
-                            spdlog::debug("bg task cycle time: {}us (smoothed: {}us)", elapsed_us, smoothed_elapsed.count());
-                            std::this_thread::sleep_for(sleep_time);
-                            continue;
+                            if (init) {
+                                sleep_time = std::chrono::microseconds(std::chrono::microseconds((bg_task_cycle_ms_*1000/10)));
+                            } else {
+                                sleep_time = (target_us > std::chrono::duration_cast<std::chrono::microseconds>(smoothed_elapsed))
+                                    ? (target_us - std::chrono::duration_cast<std::chrono::microseconds>(smoothed_elapsed))
+                                    : std::chrono::microseconds(0);
+                            }
                         }
                     } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
