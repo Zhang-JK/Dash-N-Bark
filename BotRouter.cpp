@@ -71,6 +71,7 @@ BotRouter::~BotRouter() {
 }
 
 void BotRouter::startBgTask() {
+    using namespace std::chrono;
     auto bg_ticker = ex::schedule(pool_.get_scheduler())
         | ex::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop
@@ -86,51 +87,46 @@ void BotRouter::startBgTask() {
                 pbot_->on_voice_server_update([](const dpp::voice_server_update_t& event) {
                     spdlog::debug("on_voice_server_update triggered for guild {}", event.guild_id);
                 });
-                auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000; // cycle_ms * sample_rate * bytes_per_sample * channels
-                auto last_elapsed_time = std::chrono::microseconds(0);
+
+                // cycle_ms * sample_rate * bytes_per_sample * channels
+                const auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000;
+                auto audio_buffered_timestamp = steady_clock::now();
+                auto sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                 bool init = true;
+
                 while (!token.stop_requested()) {
                     if (token.stop_requested()) break;
-                    auto sleep_time = std::chrono::microseconds((bg_task_cycle_ms_*1000*2));
                     try {
                         if (client && client->is_connected() && client->is_ready()) {
-                            auto local_start_time = std::chrono::steady_clock::now();
                             auto audio = tool_->stepAudioMixer(step_size);
                             if (audio) {
                                 // todo: crash when disconnect
                                 client->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
+                                if (init) {
+                                    audio_buffered_timestamp = steady_clock::now() + microseconds(bg_task_cycle_ms_ * 1000);
+                                    init = false;
+                                } else {
+                                    audio_buffered_timestamp += microseconds(bg_task_cycle_ms_ * 1000);
+                                }
+                                sleep_duration = duration_cast<microseconds>(audio_buffered_timestamp -
+                                    microseconds(target_buffered_audio_ms_ * 1000) - steady_clock::now());
+                                if (sleep_duration < microseconds(0)) {
+                                    sleep_duration = microseconds(0);
+                                }
                             } else {
                                 init = true;
+                                sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                             }
-
-                            // compute sleep time (ensure non-negative)
-                            auto target_us = std::chrono::microseconds(bg_task_cycle_ms_ * 1000);
-                            if (init) {
-                                sleep_time = std::chrono::microseconds(std::chrono::microseconds((bg_task_cycle_ms_*1000/5)));
-                                init = false;
-                            } else {
-                                sleep_time = (target_us > last_elapsed_time)
-                                    ? (target_us - last_elapsed_time)
-                                    : std::chrono::microseconds(0);
-                            }
-                            // todo: add real timestamp check
-                            last_elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - local_start_time);
-                            last_elapsed_time = last_elapsed_time+std::chrono::microseconds(120); // adjust for sleep overhead
+                            // spdlog::debug("sleep duration is {} ms", sleep_duration.count() / 1000.0);
                         }
                     } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
-                        client = nullptr;
-                    } catch (const dpp::exception& e) {
-                        spdlog::error("voice exception in bg task: {}", e.what());
-                        client = nullptr;
-                    } catch (const std::exception& e) {
-                        spdlog::error("Standard exception in bg task: {}", e.what());
                         client = nullptr;
                     } catch (...) {
                         spdlog::error("Unknown exception in bg task.");
                         client = nullptr;
                     }
-                    std::this_thread::sleep_for(sleep_time);
+                    std::this_thread::sleep_for(sleep_duration);
                 }
                 spdlog::debug("[Ticker] Cleaning up and stopping.");
             });

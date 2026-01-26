@@ -35,6 +35,7 @@ private:
     exec::static_thread_pool pool_{4};
     std::stop_source stop_src_;
     int bg_task_cycle_ms_ = 60;
+    int target_buffered_audio_ms_ = 20;
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H
