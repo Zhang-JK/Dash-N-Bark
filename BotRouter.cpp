@@ -76,16 +76,13 @@ void BotRouter::startBgTask() {
         | ex::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop
             return ex::just() | ex::then([this, token]() {
-                dpp::discord_voice_client* client = nullptr;
-                pbot_->on_voice_ready([&client](const dpp::voice_ready_t& event) {
+                dpp::discord_client* client = nullptr;
+                // todo: support multi instances
+                std::optional<dpp::snowflake> serving_guild_id = std::nullopt;
+                pbot_->on_voice_ready([&client, &serving_guild_id](const dpp::voice_ready_t& event) {
                     spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
-                    client = event.voice_client;
-                });
-                pbot_->on_voice_state_update([](const dpp::voice_state_update_t& event) {
-                    spdlog::debug("on_voice_state_update triggered for user {}", event.state.user_id);
-                });
-                pbot_->on_voice_server_update([](const dpp::voice_server_update_t& event) {
-                    spdlog::debug("on_voice_server_update triggered for guild {}", event.guild_id);
+                    client = event.from();
+                    serving_guild_id = event.voice_client->server_id;
                 });
 
                 // cycle_ms * sample_rate * bytes_per_sample * channels
@@ -97,34 +94,39 @@ void BotRouter::startBgTask() {
                 while (!token.stop_requested()) {
                     if (token.stop_requested()) break;
                     try {
-                        if (client && client->is_connected() && client->is_ready()) {
+                        if (client && serving_guild_id) {
+                            auto local_voice_conn = client->get_voice(serving_guild_id.value());
                             auto audio = tool_->stepAudioMixer(step_size);
-                            if (audio) {
-                                // todo: crash when disconnect
-                                client->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
-                                if (init) {
-                                    audio_buffered_timestamp = steady_clock::now() + microseconds(bg_task_cycle_ms_ * 1000);
-                                    init = false;
+                            if (local_voice_conn && audio) {
+                                if (local_voice_conn->voiceclient && local_voice_conn->voiceclient->is_ready()) {
+                                    local_voice_conn->voiceclient->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
+                                    if (init) {
+                                        audio_buffered_timestamp = steady_clock::now() + microseconds(bg_task_cycle_ms_ * 1000);
+                                        init = false;
+                                    } else {
+                                        audio_buffered_timestamp += microseconds(bg_task_cycle_ms_ * 1000);
+                                    }
+                                    sleep_duration = duration_cast<microseconds>(audio_buffered_timestamp -
+                                        microseconds(target_buffered_audio_ms_ * 1000) - steady_clock::now());
+                                    if (sleep_duration < microseconds(0)) {
+                                        sleep_duration = microseconds(0);
+                                    }
                                 } else {
-                                    audio_buffered_timestamp += microseconds(bg_task_cycle_ms_ * 1000);
-                                }
-                                sleep_duration = duration_cast<microseconds>(audio_buffered_timestamp -
-                                    microseconds(target_buffered_audio_ms_ * 1000) - steady_clock::now());
-                                if (sleep_duration < microseconds(0)) {
-                                    sleep_duration = microseconds(0);
+                                    sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                                 }
                             } else {
                                 init = true;
                                 sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                             }
-                            // spdlog::debug("sleep duration is {} ms", sleep_duration.count() / 1000.0);
                         }
                     } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
                         client = nullptr;
+                        serving_guild_id = std::nullopt;
                     } catch (...) {
                         spdlog::error("Unknown exception in bg task.");
                         client = nullptr;
+                        serving_guild_id = std::nullopt;
                     }
                     std::this_thread::sleep_for(sleep_duration);
                 }
