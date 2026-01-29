@@ -35,7 +35,6 @@ namespace AudioMixer {
             }
         }
 
-        // todo: sometime can hear glitch, try to fix it later
         for (auto it = audio.begin(); it != audio.end(); ) {
             RegisteredAudio &reg_audio = *it;
             auto data = reinterpret_cast<const int16_t *>(reg_audio.clip.getData());
@@ -67,6 +66,12 @@ namespace AudioMixer {
         }
 
         return AudioClip(output_buffer);
+    }
+
+    void AudioMixer::clear() {
+        std::lock_guard<std::mutex> lock(mutex);
+        spdlog::info("Clearing all registered audio clips.");
+        audio.clear();
     }
 
 } // namespace AudioMixer

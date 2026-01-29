@@ -115,7 +115,11 @@ void BotRouter::startBgTask() {
                                     sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                                 }
                             } else {
-                                init = true;
+                                if (!init) {
+                                    spdlog::info("client disconnected voice");
+                                    tool_->clearAllAudio();
+                                    init = true;
+                                }
                                 sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                             }
                         }

@@ -21,6 +21,7 @@ namespace AudioMixer {
     public:
         void registerAudio(AudioClip clip, float volume=1.0f);      // todo: add finish callback and start delay
         std::optional<AudioClip> step(size_t step_size = BYTES_PER_SEC_DEFAULT); // 1000ms per step
+        void clear();
 
     private:
         struct RegisteredAudio {

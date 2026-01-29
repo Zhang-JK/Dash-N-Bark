@@ -40,8 +40,15 @@ ToolInterface::ToolInvokeResult<StreamFetch::FetchManager::StreamFetchResult>
     };
 }
 
-ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url) {
+ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url, int volume) {
     spdlog::debug("fetch_manager_ {}", (void*)fetch_manager_.get());
+    if (volume < 1 || volume > 200) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "Volume must be between 1 and 200"
+        };
+    }
     auto res = fetch_manager_->fetchFromURL(url);
     if (!res.isValid()) {
         spdlog::error("Failed to fetch playlist from URL: {}, error code: {}, reason: {}",
@@ -54,7 +61,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const s
     }
     auto audio_path = res.path.value();
     AudioMixer::AudioClip clip(audio_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
-    audio_mixer_->registerAudio(clip);
+    audio_mixer_->registerAudio(clip, static_cast<float>(volume) / 100.0f);
     return {
         .success = res.error_code==0,
         .error_code = res.error_code,
@@ -68,6 +75,14 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playAudioFromFile(const std::st
     auto real_path = base_path_ + "/" + file_path;
     AudioMixer::AudioClip clip(real_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
     audio_mixer_->registerAudio(clip);
+    return {
+        .success = true,
+    };
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::clearAllAudio()
+{
+    audio_mixer_->clear();
     return {
         .success = true,
     };
