@@ -19,7 +19,12 @@ namespace AudioMixer {
 
     class AudioMixer {
     public:
-        void registerAudio(AudioClip clip, float volume=1.0f);      // todo: add finish callback and start delay
+        enum SoundType {
+            SONG,
+            AUDIO_EFFECT
+        };
+
+        void registerAudio(const AudioClip& clip, SoundType type, float volume=1.0f);
         std::optional<AudioClip> step(size_t step_size = BYTES_PER_SEC_DEFAULT); // 1000ms per step
         void clear();
 
@@ -31,8 +36,9 @@ namespace AudioMixer {
             bool finished{false};
         };
 
-        std::list<RegisteredAudio> audio;
-        std::mutex mutex;
+        std::list<RegisteredAudio> song_track_;
+        std::list<RegisteredAudio> audio_track_;
+        std::mutex mutex_;
     };
 
 } // namespace AudioMixer

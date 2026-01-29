@@ -59,9 +59,13 @@ ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const s
             .message = res.error_msg
         };
     }
-    auto audio_path = res.path.value();
-    AudioMixer::AudioClip clip(audio_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
-    audio_mixer_->registerAudio(clip, static_cast<float>(volume) / 100.0f);
+    const auto audio_path = res.path.value();
+    const AudioMixer::AudioClip clip(audio_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
+    audio_mixer_->registerAudio(clip,
+        // hack for testing
+        volume==77 ? AudioMixer::AudioMixer::AUDIO_EFFECT : AudioMixer::AudioMixer::SONG,
+        static_cast<float>(volume) / 100.0f
+    );
     return {
         .success = res.error_code==0,
         .error_code = res.error_code,
@@ -74,7 +78,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playAudioFromFile(const std::st
 {
     auto real_path = base_path_ + "/" + file_path;
     AudioMixer::AudioClip clip(real_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
-    audio_mixer_->registerAudio(clip);
+    audio_mixer_->registerAudio(clip, AudioMixer::AudioMixer::SONG);
     return {
         .success = true,
     };
