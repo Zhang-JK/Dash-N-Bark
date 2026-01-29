@@ -40,10 +40,6 @@ add_executable(${PROJECT_NAME}
         main.cpp
         BotRouter.cpp
         ToolInterface.cpp
-        Commands/CommandBase.h
-        Commands/JoinCommand.h
-        Commands/LeaveCommand.h
-        Commands/StreamCommand.h
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)

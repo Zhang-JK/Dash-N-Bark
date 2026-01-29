@@ -26,6 +26,49 @@ namespace AudioMixer {
         }
     }
 
+    std::optional<std::vector<std::tuple<std::string, int, int>>> AudioMixer::getSongTrackQueueInfo()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (song_track_.empty()) {
+            return std::nullopt;
+        }
+
+        std::vector<std::tuple<std::string, int, int>> track_info;
+        for (const auto& reg_song : song_track_) {
+            std::string name = reg_song.clip.getName();
+            int total_seconds = static_cast<int>(reg_song.clip.getSize() / BYTES_PER_SEC_DEFAULT);
+            int elapsed_seconds = static_cast<int>(reg_song.position / BYTES_PER_SEC_DEFAULT);
+            track_info.emplace_back(name, total_seconds, elapsed_seconds);
+        }
+
+        return track_info;
+    }
+
+    std::optional<std::tuple<std::string, int, int>> AudioMixer::getCurrentPlayingSong()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (song_track_.empty()) {
+            return std::nullopt;
+        }
+
+        const auto& reg_song = song_track_.front();
+        std::string name = reg_song.clip.getName();
+        int total_seconds = static_cast<int>(reg_song.clip.getSize() / BYTES_PER_SEC_DEFAULT);
+        int elapsed_seconds = static_cast<int>(reg_song.position / BYTES_PER_SEC_DEFAULT);
+        return std::make_tuple(name, total_seconds, elapsed_seconds);
+    }
+
+    bool AudioMixer::skipCurrentSong()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!song_track_.empty()) {
+            song_track_.erase(song_track_.begin());
+            spdlog::info("Skipped current song.");
+            return true;
+        }
+        return false;
+    }
+
     std::optional<AudioClip> AudioMixer::step(size_t step_size) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (song_track_.empty() && audio_track_.empty()) {

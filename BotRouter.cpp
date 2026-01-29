@@ -9,6 +9,8 @@
 #include "Commands/JoinCommand.h"
 #include "Commands/LeaveCommand.h"
 #include "Commands/StreamCommand.h"
+#include "Commands/PlaylistCommand.h"
+#include "Commands/SkipCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -162,6 +164,7 @@ void BotRouter::setCmds() {
             .add_localization("zh-CN", "离开", "离开当前语音频道。"),
         new LeaveCommand(tool_)
     );
+
     cmds_["stream"] = std::make_tuple(
         dpp::slashcommand("stream", "Stream audio from Youtube or Bilibili.", pbot_->me.id)
             .add_localization("zh-CN", "播放", "从 Youtube 或 Bilibili 播放音频。")
@@ -177,6 +180,17 @@ void BotRouter::setCmds() {
             ),
             new StreamCommand(tool_)
     );
+    cmds_["playlist"] = std::make_tuple(
+        dpp::slashcommand("playlist", "Show the current song in queue.", pbot_->me.id)
+            .add_localization("zh-CN", "播放列表", "显示当前队列中的歌曲。"),
+        new PlaylistCommand(tool_)
+    );
+    cmds_["skip"] = std::make_tuple(
+        dpp::slashcommand("skip", "Skip the current playing song.", pbot_->me.id)
+            .add_localization("zh-CN", "跳过", "跳过当前正在播放的歌曲。"),
+        new SkipCommand(tool_)
+    );
+
     // cmds_["add"] = std::make_tuple(
     //     dpp::slashcommand("add", "Add a clip to soundpad", pbot_->me.id)
     //         .add_localization("zh-CN", "添加", "添加音频片段到音效板。")

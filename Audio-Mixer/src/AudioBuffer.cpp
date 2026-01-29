@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <utility>
 
 namespace AudioMixer {
 
@@ -60,25 +61,26 @@ namespace AudioMixer {
         }
     }
 
-    AudioClip::AudioClip(const std::string& file_path, AudioBuffer::AudioFormat format) {
+    AudioClip::AudioClip(const std::string& file_path, AudioBuffer::AudioFormat format, std::string name) {
         buffer = std::make_shared<AudioBuffer>(file_path, format);
         start = 0;
         size = buffer->getSize();
+        this->name = std::move(name);
     }
 
-    AudioClip::AudioClip(const AudioBufferPtr& buffer)
-        : buffer(buffer), start(0), size(buffer->getSize()) {
+    AudioClip::AudioClip(const AudioBufferPtr& buffer, std::string name)
+        : buffer(buffer), start(0), size(buffer->getSize()), name(std::move(name)) {
     }
 
-    AudioClip::AudioClip(const AudioBufferPtr& buffer, size_t start, size_t size)
-        : buffer(buffer), start(start), size(size) {
+    AudioClip::AudioClip(const AudioBufferPtr& buffer, size_t start, size_t size, std::string name)
+        : buffer(buffer), start(start), size(size), name(std::move(name)) {
         if (start + size > buffer->getSize()) {
             throw std::out_of_range("AudioClip range exceeds buffer size");
         }
     }
 
     AudioClip::AudioClip(const AudioClip& clip, size_t start, size_t size)
-        : buffer(clip.buffer), start(clip.start + start), size(size) {
+        : buffer(clip.buffer), start(clip.start + start), size(size), name(clip.name) {
         if (this->start + size > clip.start + clip.size) {
             throw std::out_of_range("AudioClip range exceeds original clip size");
         }
@@ -90,6 +92,10 @@ namespace AudioMixer {
 
     size_t AudioClip::getSize() const {
         return size;
+    }
+
+    const std::string& AudioClip::getName() const {
+        return name;
     }
 
     AudioClip AudioClip::subClip(size_t start_sub, size_t size_sub) const {

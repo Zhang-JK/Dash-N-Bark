@@ -40,13 +40,14 @@ namespace AudioMixer {
 
     class AudioClip {
     public:
-        AudioClip(const std::string& file_path, AudioBuffer::AudioFormat format);
-        AudioClip(const AudioBufferPtr& buffer);
-        AudioClip(const AudioBufferPtr& buffer, size_t start, size_t size);
+        AudioClip(const std::string& file_path, AudioBuffer::AudioFormat format, std::string name="");
+        AudioClip(const AudioBufferPtr& buffer, std::string name="");
+        AudioClip(const AudioBufferPtr& buffer, size_t start, size_t size, std::string name="");
         AudioClip(const AudioClip& clip, size_t start, size_t size);
 
         [[nodiscard]] uint8_t* getData();
         [[nodiscard]] size_t getSize() const;
+        [[nodiscard]] const std::string& getName() const;
 
         [[nodiscard]] AudioClip subClip(size_t start_sub, size_t size_sub) const;
 
@@ -54,6 +55,7 @@ namespace AudioMixer {
         AudioBufferPtr buffer;
         size_t start;
         size_t size;
+        std::string name;
     };
 
     typedef std::shared_ptr<AudioClip> AudioClipPtr;

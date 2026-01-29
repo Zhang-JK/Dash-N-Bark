@@ -60,7 +60,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const s
         };
     }
     const auto audio_path = res.path.value();
-    const AudioMixer::AudioClip clip(audio_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
+    const AudioMixer::AudioClip clip(audio_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K, res.title);
     audio_mixer_->registerAudio(clip,
         // hack for testing
         volume==77 ? AudioMixer::AudioMixer::AUDIO_EFFECT : AudioMixer::AudioMixer::SONG,
@@ -71,6 +71,31 @@ ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const s
         .error_code = res.error_code,
         .message = res.error_msg,
         .data = res.title
+    };
+}
+
+ToolInterface::ToolInvokeResult<std::optional<std::vector<std::tuple<std::string, int, int>>>> ToolInterface::getPlaylist()
+{
+    auto playlist = audio_mixer_->getSongTrackQueueInfo();
+    return {
+        .success = playlist.has_value(),
+        .data = std::move(playlist)
+    };
+}
+
+ToolInterface::ToolInvokeResult<std::optional<std::tuple<std::string, int, int>>> ToolInterface::getCurrentSong()
+{
+    auto current_song = audio_mixer_->getCurrentPlayingSong();
+    return {
+        .success = current_song.has_value(),
+        .data = std::move(current_song)
+    };
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::skipCurrentSong()
+{
+    return {
+        .success = audio_mixer_->skipCurrentSong()
     };
 }
 

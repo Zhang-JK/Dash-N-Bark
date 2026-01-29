@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <list>
+#include <vector>
 
 #include "AudioBuffer.h"
 
@@ -25,6 +26,10 @@ namespace AudioMixer {
         };
 
         void registerAudio(const AudioClip& clip, SoundType type, float volume=1.0f);
+        std::optional<std::vector<std::tuple<std::string, int, int>>> getSongTrackQueueInfo();
+        std::optional<std::tuple<std::string, int, int>> getCurrentPlayingSong();
+
+        bool skipCurrentSong();
         std::optional<AudioClip> step(size_t step_size = BYTES_PER_SEC_DEFAULT); // 1000ms per step
         void clear();
 
