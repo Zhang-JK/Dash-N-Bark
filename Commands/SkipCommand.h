@@ -40,6 +40,10 @@ public:
                         "\n**Now playing** " + std::get<0>(*next_song.data));
         }
     }
+
+    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+        // No button interaction for this command
+    }
 };
 
 

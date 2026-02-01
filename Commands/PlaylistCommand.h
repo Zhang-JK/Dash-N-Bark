@@ -54,6 +54,10 @@ public:
         }
         event.reply(out);
     }
+
+    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+        // No button interaction for this command
+    }
 };
 
 

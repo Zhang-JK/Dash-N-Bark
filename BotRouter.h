@@ -14,6 +14,9 @@
 
 namespace ex = stdexec;
 
+template <typename T>
+concept SlashAndButtonCmd = std::same_as<T, dpp::slashcommand_t> || std::same_as<T, dpp::button_click_t>;
+
 class BotRouter {
 public:
     BotRouter(const std::string& botToken, const std::string& workDir);
@@ -23,7 +26,12 @@ public:
     void startBgTask();
     void setCmds();
     auto getRegisterCmdFunction() -> std::function<void(const dpp::ready_t &event)>;
-    auto getCmdRouterFunction() -> std::function<void(const dpp::slashcommand_t &event)>;
+    template<SlashAndButtonCmd CmdType>
+    auto getCmdRouterFunction() -> std::function<void(const CmdType &event)>;
+    template<SlashAndButtonCmd CmdType>
+    std::string getcommandName(const CmdType& event);
+    template<SlashAndButtonCmd CmdType>
+    void handlerExecWrapper(CommandBase* handler, const CmdType& event, std::shared_ptr<dpp::cluster> bot);
 
 private:
     std::string botToken_;

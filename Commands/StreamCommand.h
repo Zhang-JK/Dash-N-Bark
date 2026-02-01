@@ -63,6 +63,10 @@ public:
             event.edit_response("Streaming " + tool_res.data.value());
         }
     }
+
+    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+        // No button interaction for this command
+    }
 };
 
 #endif //DASH_N_BARK_STREAMCOMMAND_H

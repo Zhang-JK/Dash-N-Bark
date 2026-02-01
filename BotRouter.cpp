@@ -11,6 +11,7 @@
 #include "Commands/StreamCommand.h"
 #include "Commands/PlaylistCommand.h"
 #include "Commands/SkipCommand.h"
+#include "Commands/SoundpadCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -48,7 +49,8 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
 
     this->setCmds();
     pbot_->on_ready(this->getRegisterCmdFunction());
-    pbot_->on_slashcommand(this->getCmdRouterFunction());
+    pbot_->on_slashcommand(this->getCmdRouterFunction<dpp::slashcommand_t>());
+    pbot_->on_button_click(this->getCmdRouterFunction<dpp::button_click_t>());
 }
 
 BotRouter::~BotRouter() {
@@ -220,11 +222,12 @@ void BotRouter::setCmds() {
     //         ),
     //     std::nullopt
     // );
-    // cmds_["soundpad"] = std::make_tuple(
-    //     dpp::slashcommand("soundpad", "Play soundpad effects.", pbot_->me.id)
-    //         .add_localization("zh-CN", "音效板", "播放音效板效果。"),
-    //     std::nullopt
-    // );
+    cmds_["soundpad"] = std::make_tuple(
+        dpp::slashcommand("soundpad", "Play soundpad effects.", pbot_->me.id)
+            .add_localization("zh-CN", "音效板", "播放音效板效果。"),
+        new SoundpadCommand(tool_)
+    );
+
     // cmds_["parrot"] = std::make_tuple(
     //     dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
     //         .add_localization("zh-CN", "复读", "重复你的消息。"),
@@ -267,16 +270,17 @@ auto BotRouter::getRegisterCmdFunction() -> std::function<void(const dpp::ready_
     };
 }
 
-auto BotRouter::getCmdRouterFunction() -> std::function<void(const dpp::slashcommand_t &event)> {
-    return [local_bot = pbot_, cmds = &cmds_](const dpp::slashcommand_t &event) {
-        const auto& cmd_name = event.command.get_command_name();
+template<SlashAndButtonCmd CmdType>
+auto BotRouter::getCmdRouterFunction() -> std::function<void(const CmdType &event)> {
+    return [local_bot = pbot_, cmds = &cmds_, this](const CmdType &event) {
+        const auto& cmd_name = this->getcommandName<CmdType>(event);
         spdlog::debug("Received command: {}", cmd_name);
         auto it = cmds->find(cmd_name);
         if (it != cmds->end()) {
             const auto& [_, handler_opt] = it->second;
             if (handler_opt.has_value()) {
                 const auto& handler = handler_opt.value();
-                handler->execute(event, local_bot);
+                this->handlerExecWrapper<CmdType>(handler, event, local_bot);
             } else {
                 spdlog::warn("No handler defined for command: {}", cmd_name);
                 event.reply("This command is not yet implemented.");
@@ -286,4 +290,39 @@ auto BotRouter::getCmdRouterFunction() -> std::function<void(const dpp::slashcom
             event.reply("Unknown command.");
         }
     };
+}
+
+template<SlashAndButtonCmd CmdType>
+std::string BotRouter::getcommandName(const CmdType& event) {
+    throw std::runtime_error("Not implemented getcommandName");
+}
+
+template<>
+std::string BotRouter::getcommandName(const dpp::slashcommand_t& event) {
+    return event.command.get_command_name();
+}
+
+template<>
+std::string BotRouter::getcommandName(const dpp::button_click_t& event) {
+    const std::string id = event.custom_id;
+    const auto pos = id.find("::");
+    if (pos == std::string::npos) {
+        return id;
+    }
+    return id.substr(0, pos);
+}
+
+template<SlashAndButtonCmd CmdType>
+void BotRouter::handlerExecWrapper(CommandBase* handler, const CmdType& event, std::shared_ptr<dpp::cluster> bot) {
+    throw std::runtime_error("Not implemented handlerExecWrapper");
+}
+
+template<>
+void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::slashcommand_t& event, std::shared_ptr<dpp::cluster> bot) {
+    handler->execute(event, bot);
+}
+
+template<>
+void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::button_click_t& event, std::shared_ptr<dpp::cluster> bot) {
+    handler->button(event, bot);
 }

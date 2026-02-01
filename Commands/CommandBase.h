@@ -20,10 +20,8 @@ public:
     virtual ~CommandBase() = default;
 
     virtual void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
+    virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
 
-    void operator()(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) {
-        execute(event, std::move(bot));
-    }
 protected:
     std::shared_ptr<ToolInterface> tool_interface_;
 };
