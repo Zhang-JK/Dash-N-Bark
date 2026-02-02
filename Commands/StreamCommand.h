@@ -28,28 +28,9 @@ public:
         }
         spdlog::debug("Got user requested url {} volume {}", url.c_str(), volume);
 
-        bool is_ready = true;
-        dpp::voiceconn* vc_bot = event.from()->get_voice(event.command.guild_id);
-        if (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready()) {
-            event.reply("Bot does not in any channel. Try to join");
-            is_ready = false;
-            if (!g->connect_member_voice(*event.owner, event.command.get_issuing_user().id)) {
-                event.edit_response("You don't seem to be in a voice channel!");
-                return;
-            }
-            // wait for ready
-            auto start = std::chrono::steady_clock::now();
-            const auto timeout = std::chrono::milliseconds(3000);
-            do {
-                vc_bot = event.from()->get_voice(event.command.guild_id);
-                if (std::chrono::steady_clock::now() - start > timeout) {
-                    event.edit_response("Timeout waiting for voice client to become ready.");
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            } while (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready());
+        if (!joinVoiceChannel(event)) {
+            return;
         }
-        vc_bot->voiceclient->set_send_audio_type(dpp::discord_voice_client::satype_live_audio);
 
         auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, volume);
         if (!tool_res.success || !tool_res.data.has_value()) {
@@ -57,11 +38,7 @@ public:
             return;
         }
 
-        if (is_ready) {
-            event.reply("Streaming " + tool_res.data.value());
-        } else {
-            event.edit_response("Streaming " + tool_res.data.value());
-        }
+        event.reply("Streaming " + tool_res.data.value());
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {

@@ -11,7 +11,16 @@
 
 class AddCommand : public CommandBase {
 private:
+    struct AddParams {
+        std::string name;
+        std::string user_id;
+        std::string tag1;
+        std::string tag2;
+        bool pin;
+    };
+    std::optional<AddParams> params_;
     std::optional<AudioMixer::AudioClip> processing_clip_;
+
 
 public:
     AddCommand() = delete;
@@ -88,6 +97,7 @@ public:
                 ? std::get<std::string>(event.get_parameter("tag2")) : std::string{};
         auto pin = std::holds_alternative<bool>(event.get_parameter("pin"))
                 ? std::get<bool>(event.get_parameter("pin")) : false;
+        auto user_id = event.command.usr.id.str();
 
         // verify parameters
         if (url.empty() || name.empty()) {
@@ -121,8 +131,12 @@ public:
         if (processing_clip_) {
             processing_clip_.reset();
         }
+        if (params_) {
+            params_.reset();
+        }
         processing_clip_ = std::optional(
             AudioMixer::AudioClip(std::move(fetch_res.data.value()), start_pos, buffer_length));
+        params_ = AddParams{name, user_id, tag1, tag2, pin};
 
         // Create a message
         dpp::message msg(event.command.channel_id, "You are adding a new sound clip:\n"
@@ -142,32 +156,42 @@ public:
             event.reply("Invalid button ID for add");
             return;
         }
+        if (!processing_clip_ || !params_) {
+            event.reply(dpp::ir_update_message,
+                "No active add session, please use /add command to start a new session.");
+            processing_clip_.reset();
+            params_.reset();
+            spdlog::warn("No active add session when handling button click");
+            return;
+        }
         if (ids[1] == "Preview") {
-            if (processing_clip_) {
-                // placeholder
-                dpp::message msg(event.command.channel_id,
-                        "Previewing the audio clip " + std::string("{placeholder}"));
-                msg.add_component(assembleButton());
-                event.reply(dpp::ir_update_message, msg);
-            } else {
-                event.reply(dpp::ir_update_message, "Audio missing, Session is cancelled");
+            if (!joinVoiceChannel(event)) {
+                return;
             }
+            tool_interface_->playAudioClip(processing_clip_.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
+            dpp::message msg(event.command.channel_id,
+                    "Previewing the audio clip " + params_.value().name);
+            msg.add_component(assembleButton());
+            event.reply(dpp::ir_update_message, msg);
         } else if (ids[1] == "Confirm") {
-            if (processing_clip_) {
-                // placeholder
-                event.reply(dpp::ir_update_message, "Added " + std::string("{placeholder}") +
-                        " to soundpad, This session is done");
-                processing_clip_.reset();
+            auto add_res = tool_interface_->addToSoundpad(processing_clip_.value(),
+                                                                                    params_.value().name,
+                                                                                    params_.value().user_id,
+                                                                                    params_.value().tag1,
+                                                                                    params_.value().tag2,
+                                                                                    params_.value().pin);
+            if (!add_res.success) {
+                event.reply(dpp::ir_update_message, "Failed to add to soundpad: " + add_res.message);
             } else {
-                event.reply(dpp::ir_update_message, "Audio missing, Session is cancelled");
+                event.reply(dpp::ir_update_message, "Added " + params_.value().name +
+                    " to soundpad, This session is done");
             }
+            processing_clip_.reset();
+            params_.reset();
         } else if (ids[1] == "Cancel") {
-            if (processing_clip_) {
-                processing_clip_.reset();
-                event.reply(dpp::ir_update_message, "Operation cancelled, This session is done");
-            } else {
-                event.reply(dpp::ir_update_message, "Audio missing, Session is cancelled");
-            }
+            processing_clip_.reset();
+            params_.reset();
+            event.reply(dpp::ir_update_message, "Operation cancelled, This session is done");
         } else {
             spdlog::info("Unknown action: {} {} {}", ids[0], ids[1], ids[2]);
             event.reply(dpp::ir_update_message, "Unknown action.");

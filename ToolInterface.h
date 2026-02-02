@@ -26,7 +26,7 @@ public:
     };
 
     // stream audio
-    ToolInvokeResult<> playAudioFromFile(const std::string& file_path);
+    ToolInvokeResult<> playAudioClip(AudioMixer::AudioClip& clip, AudioMixer::AudioMixer::SoundType type);
     ToolInvokeResult<> fetchAndEnqueuePlaylist(const std::string& url, int volume);
     ToolInvokeResult<std::optional<std::vector<std::tuple<std::string, int, int>>>> getPlaylist();
     ToolInvokeResult<std::optional<std::tuple<std::string, int, int>>> getCurrentSong();

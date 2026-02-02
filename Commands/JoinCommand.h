@@ -21,16 +21,7 @@ public:
             return;
         }
 
-        auto voice_conn = event.from()->get_voice(event.command.guild_id);
-        if (voice_conn) {
-            auto users_vc = g->voice_members.find(event.command.get_issuing_user().id);
-            if (users_vc != g->voice_members.end() && voice_conn->channel_id == users_vc->second.channel_id) {
-                event.reply("I'm already in your voice channel!");
-                return;
-            }
-        }
-        if (!g->connect_member_voice(*event.owner, event.command.get_issuing_user().id)) {
-            event.reply("You don't seem to be in a voice channel!");
+        if (!joinVoiceChannel(event)) {
             return;
         }
         event.reply("Joined your voice channel!");

@@ -18,6 +18,15 @@ ToolInterface::~ToolInterface()
     // Cleanup if necessary
 }
 
+ToolInterface::ToolInvokeResult<> ToolInterface::playAudioClip(AudioMixer::AudioClip& clip,
+                                                    AudioMixer::AudioMixer::SoundType type)
+{
+    audio_mixer_->registerAudio(clip, type);
+    return {
+        .success = true,
+    };
+}
+
 ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url, int volume) {
     if (volume < 1 || volume > 200) {
         return {
@@ -73,16 +82,6 @@ ToolInterface::ToolInvokeResult<> ToolInterface::skipCurrentSong()
 {
     return {
         .success = audio_mixer_->skipCurrentSong()
-    };
-}
-
-ToolInterface::ToolInvokeResult<> ToolInterface::playAudioFromFile(const std::string& file_path)
-{
-    auto real_path = base_path_ + "/" + file_path;
-    AudioMixer::AudioClip clip(real_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K);
-    audio_mixer_->registerAudio(clip, AudioMixer::AudioMixer::SONG);
-    return {
-        .success = true,
     };
 }
 
