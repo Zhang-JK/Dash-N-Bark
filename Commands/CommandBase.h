@@ -23,6 +23,24 @@ public:
     virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
 
 protected:
+    static std::vector<std::string> parseButtonId(const std::string &button_id, const std::string &delimiter = "::") {
+        std::vector<std::string> parts;
+        if (delimiter.empty()) {
+            return parts;
+        }
+        size_t start = 0;
+        size_t end = button_id.find(delimiter, start);
+        while (end != std::string::npos) {
+            parts.emplace_back(button_id.substr(start, end - start));
+            start = end + delimiter.size();
+            end = button_id.find(delimiter, start);
+        }
+        if (start <= button_id.size()) {
+            parts.emplace_back(button_id.substr(start));
+        }
+        return parts;
+    }
+
     std::shared_ptr<ToolInterface> tool_interface_;
 };
 

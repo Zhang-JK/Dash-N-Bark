@@ -96,11 +96,11 @@ namespace AudioMixer {
         }
     }
 
-    bool SoundPadManager::saveAudioClip(AudioClip& clip, const std::string& name,
-            const std::string& tag1, const std::string& tag2, bool fav) const {
+    std::tuple<bool, std::string> SoundPadManager::saveAudioClip(AudioClip& clip, const std::string& name,
+            const std::string& user_id, const std::string& tag1, const std::string& tag2, bool fav) const {
         if (!sql) {
             spdlog::error("SoundPadManager not initialized");
-            return false;
+            return {false, "SoundPadManager not initialized"};
         }
         // save audio data to file
         fs::path file_p = fs::path(sound_save_path) / (name + ".pcm");
@@ -108,7 +108,7 @@ namespace AudioMixer {
         std::ofstream output(file_path, std::ios::out | std::ios::binary);
         if (!output.is_open()) {
             spdlog::error("failed to open file for writing: {}", file_path);
-            return false;
+            return {false, "failed to open file for writing: " + file_path};
         }
         output.write(reinterpret_cast<const char*>(clip.getData()), clip.getSize());
         output.close();
@@ -124,15 +124,15 @@ namespace AudioMixer {
                 *sql << "INSERT OR IGNORE INTO tags (name) VALUES (:name);", soci::use(tag2);
                 *sql << "SELECT id FROM tags WHERE name = :name;", soci::into(tag2_id), soci::use(tag2);
             }
-            *sql << "INSERT INTO sounds (name, tag1, tag2, path, fav) "
-                    "VALUES (:name, :tag1, :tag2, :path, :fav);",
+            *sql << "INSERT INTO sounds (name, tag1, tag2, path, fav, reserved1) "
+                    "VALUES (:name, :tag1, :tag2, :path, :fav, :reserved1);",
                     soci::use(name), soci::use(tag1_id), soci::use(tag2_id),
-                    soci::use(file_path), soci::use(fav_int);
+                    soci::use(file_path), soci::use(fav_int), soci::use(user_id);
             spdlog::info("saved audio clip '{}' to database", name);
-            return true;
+            return {true, ""};
         } catch (const soci::soci_error& e) {
             spdlog::error("failed to save audio clip to database: {}", e.what());
-            return false;
+            return {false, e.what()};
         }
     }
 

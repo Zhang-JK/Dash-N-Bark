@@ -18,30 +18,7 @@ ToolInterface::~ToolInterface()
     // Cleanup if necessary
 }
 
-ToolInterface::ToolInvokeResult<StreamFetch::FetchManager::StreamFetchResult>
-    ToolInterface::fetchAudioFromUrl(const std::string& url)
-{
-    spdlog::debug("fetch_manager_ {}", (void*)fetch_manager_.get());
-    auto res = fetch_manager_->fetchFromURL(url);
-    if (!res.isValid()) {
-        spdlog::error("Failed to fetch playlist from URL: {}, error code: {}, reason: {}",
-                            url, res.error_code, res.error_msg);
-        return {
-            .success = res.error_code==0,
-            .error_code = res.error_code,
-            .message = res.error_msg
-        };
-    }
-    return {
-        .success = res.error_code==0,
-        .error_code = res.error_code,
-        .message = res.error_msg,
-        .data = res
-    };
-}
-
 ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url, int volume) {
-    spdlog::debug("fetch_manager_ {}", (void*)fetch_manager_.get());
     if (volume < 1 || volume > 200) {
         return {
             .success = false,
@@ -122,3 +99,28 @@ std::optional<AudioMixer::AudioClip> ToolInterface::stepAudioMixer(size_t step_s
     return audio_mixer_->step(step_size);
 }
 
+ToolInterface::ToolInvokeResult<std::optional<AudioMixer::AudioClip>> ToolInterface::fetchSoundFromUrl(const std::string& url)
+{
+    auto res = fetch_manager_->fetchFromURL(url);
+    return {
+        .success = res.isValid(),
+        .error_code = res.error_code,
+        .message = res.error_msg,
+        .data = res.isValid()
+            ? std::optional(
+                AudioMixer::AudioClip(
+                    res.path.value(), AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K, res.title))
+            : std::nullopt
+    };
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::addToSoundpad(AudioMixer::AudioClip& clip, const std::string& name,
+        const std::string& user_id, const std::string& tag1, const std::string& tag2, bool fav)
+{
+    auto res = sound_pad_manager_->saveAudioClip(clip, name, user_id, tag1, tag2, fav);
+    return {
+        .success = std::get<0>(res),
+        .error_code = std::get<0>(res) ? 0 : -1,
+        .message = std::get<1>(res)
+    };
+}

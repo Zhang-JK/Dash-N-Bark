@@ -25,16 +25,21 @@ public:
         T data;
     };
 
+    // stream audio
     ToolInvokeResult<> playAudioFromFile(const std::string& file_path);
-    ToolInvokeResult<StreamFetch::FetchManager::StreamFetchResult> fetchAudioFromUrl(const std::string& url);
-
     ToolInvokeResult<> fetchAndEnqueuePlaylist(const std::string& url, int volume);
     ToolInvokeResult<std::optional<std::vector<std::tuple<std::string, int, int>>>> getPlaylist();
     ToolInvokeResult<std::optional<std::tuple<std::string, int, int>>> getCurrentSong();
     ToolInvokeResult<> skipCurrentSong();
     ToolInvokeResult<> clearAllAudio();
-
     [[nodiscard]] std::optional<AudioMixer::AudioClip> stepAudioMixer(size_t step_size) const;
+
+    // sound pad
+    ToolInvokeResult<std::optional<AudioMixer::AudioClip>> fetchSoundFromUrl(const std::string& url);
+    ToolInvokeResult<> addToSoundpad(AudioMixer::AudioClip& clip, const std::string& name,
+        const std::string& user_id, const std::string& tag1, const std::string& tag2, bool fav);
+    ToolInvokeResult<std::optional<std::map<int, std::string>>> listSoundpadClipsPaged(int page, int page_size);
+    ToolInvokeResult<> playSoundpadClip(int clip_id, int volume);
 
 private:
     std::string base_path_;

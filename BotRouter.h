@@ -29,7 +29,7 @@ public:
     template<SlashAndButtonCmd CmdType>
     auto getCmdRouterFunction() -> std::function<void(const CmdType &event)>;
     template<SlashAndButtonCmd CmdType>
-    std::string getcommandName(const CmdType& event);
+    std::string getCommandName(const CmdType& event);
     template<SlashAndButtonCmd CmdType>
     void handlerExecWrapper(CommandBase* handler, const CmdType& event, std::shared_ptr<dpp::cluster> bot);
 
