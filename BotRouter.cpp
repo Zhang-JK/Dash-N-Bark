@@ -229,9 +229,18 @@ void BotRouter::setCmds() {
     );
     cmds_["soundpad"] = std::make_tuple(
         dpp::slashcommand("soundpad", "Play soundpad effects.", pbot_->me.id)
-            .add_localization("zh-CN", "音效板", "播放音效板效果。"),
+            .add_localization("zh-CN", "音效板", "播放音效板效果。")
+            .add_option(
+                dpp::command_option(dpp::co_boolean, "by_tag", "Select sound by tag (true) or by index (false)", false)
+                    .add_localization("zh-CN", "按标签选择", "是否通过标签选择音效 (true/false)")
+            ),
         new SoundpadCommand(tool_)
     );
+    // cmds_["manage_soundpad"] = std::make_tuple(
+    //     dpp::slashcommand("manage_soundpad", "Manage soundpad clips.", pbot_->me.id)
+    //         .add_localization("zh-CN", "管理音效板", "管理音效板片段。"),
+    //     std::nullopt
+    // );
 
     // cmds_["parrot"] = std::make_tuple(
     //     dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
@@ -244,8 +253,8 @@ void BotRouter::setCmds() {
     //     std::nullopt
     // );
     // cmds_["robot"] = std::make_tuple(
-    //     dpp::slashcommand("robot", "React to your messages.", pbot_->me.id)
-    //         .add_localization("zh-CN", "机器人", "对你的消息做出机器人音效回应。"),
+    //     dpp::slashcommand("robot", "Be triggered to certain voice chat.", pbot_->me.id)
+    //         .add_localization("zh-CN", "机器人", "被触发到特定的语音聊天。"),
     //     std::nullopt
     // );
 }

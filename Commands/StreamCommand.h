@@ -32,6 +32,7 @@ public:
             return;
         }
 
+        // todo: handle timeout for more than 3s
         auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, volume);
         if (!tool_res.success || !tool_res.data.has_value()) {
             event.reply("Failed to fetch with error code " + std::to_string(tool_res.error_code) + ": " + tool_res.message);

@@ -118,6 +118,7 @@ public:
         auto buffer_length = timeToBufferIndex(end_sec - start_sec, AudioMixer::BYTES_PER_SEC_DEFAULT);
 
         // fetch from url
+        // todo: handle timeout for more than 3s
         auto fetch_res = tool_interface_->fetchSoundFromUrl(url);
         if (!fetch_res.success || !fetch_res.data) {
             event.reply("Failed to fetch sound for " + fetch_res.message +
