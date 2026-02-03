@@ -32,14 +32,15 @@ public:
             return;
         }
 
-        // todo: handle timeout for more than 3s
+        event.reply(dpp::ir_deferred_channel_message_with_source, "Fetching sound from URL...");
         auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, volume);
         if (!tool_res.success || !tool_res.data.has_value()) {
-            event.reply("Failed to fetch with error code " + std::to_string(tool_res.error_code) + ": " + tool_res.message);
+            event.edit_original_response(dpp::message("Failed to fetch with error code " +
+                        std::to_string(tool_res.error_code) + ": " + tool_res.message));
             return;
         }
 
-        event.reply("Streaming " + tool_res.data.value());
+        event.edit_original_response(dpp::message("Streaming " + tool_res.data.value()));
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {

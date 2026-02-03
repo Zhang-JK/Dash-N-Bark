@@ -118,15 +118,15 @@ public:
         auto buffer_length = timeToBufferIndex(end_sec - start_sec, AudioMixer::BYTES_PER_SEC_DEFAULT);
 
         // fetch from url
-        // todo: handle timeout for more than 3s
+        event.reply(dpp::ir_deferred_channel_message_with_source, "Fetching sound from URL...");
         auto fetch_res = tool_interface_->fetchSoundFromUrl(url);
         if (!fetch_res.success || !fetch_res.data) {
-            event.reply("Failed to fetch sound for " + fetch_res.message +
-                        " with err code " + std::to_string(fetch_res.error_code));
+            event.edit_original_response(dpp::message("Failed to fetch sound for " + fetch_res.message +
+                        " with err code " + std::to_string(fetch_res.error_code)));
             return;
         }
         if (fetch_res.data.value().getSize()  < start_pos + buffer_length) {
-            event.reply("The fetched sound is shorter than the specified end time.");
+            event.edit_original_response(dpp::message("The fetched sound is shorter than the specified end time."));
             return;
         }
         if (processing_clip_) {
@@ -148,7 +148,7 @@ public:
 
         auto ts = std::to_string(static_cast<long long>(std::time(nullptr)));
         msg.add_component(assembleButton());
-        event.reply(msg);
+        event.edit_original_response(msg);
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {

@@ -198,14 +198,13 @@ public:
         }
         auto recv_ts = std::stoll(ids[3]);
         auto now_ts = std::time(nullptr);
+        if (!command_uid_ || ids[4] != command_uid_.value()) {
+            event.reply(dpp::ir_update_message, "This soundpad interaction is no longer valid.");
+            return;
+        }
         if (std::abs(now_ts - recv_ts) > 180) {
             // 3 minutes expiration
             event.reply(dpp::ir_update_message, "This soundpad interaction has expired.");
-            clean_up();
-            return;
-        }
-        if (!command_uid_ || ids[4] != command_uid_.value()) {
-            event.reply(dpp::ir_update_message, "This soundpad interaction is no longer valid.");
             clean_up();
             return;
         }
