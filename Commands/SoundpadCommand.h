@@ -7,14 +7,13 @@
 
 #include "CommandBase.h"
 
-#include <dpp/unicode_emoji.h>
-
 class SoundpadCommand : public CommandBase {
 private:
     struct PagedComponent {
         int current_page;
         int total_pages;
         std::string tag;
+        bool by_tag;
     };
     std::optional<std::map<int, std::string>> soundpad_mappings_;
     std::optional<PagedComponent> soundpad_pagination_;
@@ -38,7 +37,7 @@ private:
         command_uid_.reset();
     }
 
-    [[nodiscard]] std::vector<dpp::component> build_soundpad_component(int items_per_row = 3) const {
+    [[nodiscard]] std::vector<dpp::component> build_soundpad_component(bool isTag = false, int items_per_row = 3) const {
         if (!soundpad_mappings_ || soundpad_mappings_->empty() || !command_uid_) {
             return {}; // return empty vector if no mappings
         }
@@ -94,7 +93,9 @@ private:
                         .set_type(dpp::cot_button)
                         .set_label(label)
                         .set_style(dpp::cos_primary)
-                        .set_id("soundpad::play::" + std::to_string(id) + "::" + ts + "::" +command_uid_.value())
+                        .set_id("soundpad::" + std::string(isTag ? "tag" : "play") +
+                                "::" + (isTag ? label : std::to_string(id)) +
+                                "::" + ts + "::" +command_uid_.value())
                 );
 
                 ++in_row;
@@ -146,12 +147,35 @@ private:
         return rows;
     }
 
-    void reply_with_button_msg(const dpp::button_click_t &event, const std::string &content) const {
+    void reply_with_button_msg(const dpp::button_click_t &event, const std::string &content, bool is_tag = false) const {
         dpp::message msg(event.command.channel_id, content);
-        for (auto &comp : build_soundpad_component()) {
+        for (auto &comp : build_soundpad_component(is_tag)) {
             msg.add_component(comp);
         }
         event.reply(dpp::ir_update_message, msg);
+    }
+
+    void update_button_page(const dpp::button_click_t &event, bool is_tag = false) {
+        decltype(tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE,
+            soundpad_pagination_->total_pages, "")) res;
+        if (is_tag) {
+            res = tool_interface_->listTagsPaged(
+                                    soundpad_pagination_->current_page, PAGE_SIZE,
+                                    soundpad_pagination_->total_pages);
+        } else {
+            res = tool_interface_->listSoundpadClipsPaged(
+                                    soundpad_pagination_->current_page, PAGE_SIZE,
+                                    soundpad_pagination_->total_pages, soundpad_pagination_->tag);
+        }
+        if (!res.success || ! res.data.has_value() || soundpad_pagination_->total_pages == 0) {
+            event.reply(dpp::ir_update_message, "Fetch data failed");
+            clean_up();
+            return;
+        }
+        soundpad_mappings_.reset();
+        soundpad_mappings_ = res.data.value();
+        reply_with_button_msg(event,
+            is_tag ? "Select your tag:" : "Page " + std::to_string(soundpad_pagination_->current_page + 1), is_tag);
     }
 
 public:
@@ -162,26 +186,29 @@ public:
 
     void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
         // get and verify params
-        auto tag = std::holds_alternative<std::string>(event.get_parameter("tag"))
-                ? std::get<std::string>(event.get_parameter("tag")) : std::string{};
+        auto use_tag = std::holds_alternative<bool>(event.get_parameter("by_tag"))
+                ? std::get<bool>(event.get_parameter("by_tag")) : false;
 
         // query soundpad db
         int local_total_pages = 0;
-        auto res = tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE, local_total_pages, tag);
+        decltype(tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE, local_total_pages, "")) res;
+        if (use_tag) {
+            res = tool_interface_->listTagsPaged(0, PAGE_SIZE, local_total_pages);
+        } else {
+            res = tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE, local_total_pages, "");
+        }
         if (!res.success || ! res.data.has_value() || local_total_pages == 0) {
-            if (tag.empty()) event.reply("Soundpad empty or unavailable.");
-            else event.reply("Nothing found for tag: " + tag);
+            event.reply("Soundpad empty or unavailable.");
             return;
         }
         clean_up();
         soundpad_mappings_ = res.data.value();
-        soundpad_pagination_ = PagedComponent{0, local_total_pages, tag};
+        soundpad_pagination_ = PagedComponent{0, local_total_pages, "", use_tag};
         command_uid_ = random_gen_id();
 
         // build message with button components
-        dpp::message msg(event.command.channel_id,
-            "Soundpad Clips" + (tag.empty() ? "" : (" for tag: " + tag)));
-        for (auto &comp : build_soundpad_component()) {
+        dpp::message msg(event.command.channel_id, use_tag ? "Select your tag:" : "Soundpad Clips");
+        for (auto &comp : build_soundpad_component(use_tag)) {
             msg.add_component(comp);
         }
 
@@ -219,36 +246,16 @@ public:
         auto cmd_param = ids[2];
         if (cmd == "vol_down") {
             soundpad_volume_ = std::max(10, soundpad_volume_ - 10);
-            reply_with_button_msg(event, "Volume decreased to " + std::to_string(soundpad_volume_));
+            reply_with_button_msg(event, "Volume decreased to " + std::to_string(soundpad_volume_), soundpad_pagination_->by_tag);
         } else if (cmd == "vol_up") {
             soundpad_volume_ = std::min(100, soundpad_volume_ + 10);
-            reply_with_button_msg(event, "Volume increased to " + std::to_string(soundpad_volume_));
+            reply_with_button_msg(event, "Volume increased to " + std::to_string(soundpad_volume_), soundpad_pagination_->by_tag);
         } else if (cmd == "page_prev") {
             soundpad_pagination_->current_page = std::max(0, soundpad_pagination_->current_page - 1);
-            auto res = tool_interface_->listSoundpadClipsPaged(
-                                        soundpad_pagination_->current_page, PAGE_SIZE,
-                                        soundpad_pagination_->total_pages, soundpad_pagination_->tag);
-            if (!res.success || ! res.data.has_value() || soundpad_pagination_->total_pages == 0) {
-                event.reply(dpp::ir_update_message, "Fetch data failed");
-                clean_up();
-                return;
-            }
-            soundpad_mappings_.reset();
-            soundpad_mappings_ = res.data.value();
-            reply_with_button_msg(event, "Page " + std::to_string(soundpad_pagination_->current_page + 1));
+            update_button_page(event, soundpad_pagination_->by_tag);
         } else if (cmd == "page_next") {
             soundpad_pagination_->current_page = std::min(soundpad_pagination_->total_pages - 1, soundpad_pagination_->current_page + 1);
-            auto res = tool_interface_->listSoundpadClipsPaged(
-                                        soundpad_pagination_->current_page, PAGE_SIZE,
-                                        soundpad_pagination_->total_pages, soundpad_pagination_->tag);
-            if (!res.success || ! res.data.has_value() || soundpad_pagination_->total_pages == 0) {
-                event.reply(dpp::ir_update_message, "Fetch data failed");
-                clean_up();
-                return;
-            }
-            soundpad_mappings_.reset();
-            soundpad_mappings_ = res.data.value();
-            reply_with_button_msg(event, "Page " + std::to_string(soundpad_pagination_->current_page + 1));
+            update_button_page(event, soundpad_pagination_->by_tag);
         } else if (cmd == "play") {
             if (!joinVoiceChannel(event)) {
                 return;
@@ -259,7 +266,12 @@ public:
                 event.reply(dpp::ir_update_message, "Failed to play clip ID: " + std::to_string(clip_id));
                 return;
             }
-            reply_with_button_msg(event, "Play clip: " + soundpad_mappings_->at(clip_id));
+            reply_with_button_msg(event, "Play clip: " + soundpad_mappings_->at(clip_id), soundpad_pagination_->by_tag);
+        } else if (cmd == "tag") {
+            soundpad_pagination_->current_page = 0;
+            soundpad_pagination_->tag = cmd_param;
+            soundpad_pagination_->by_tag = false;
+            update_button_page(event, false);
         } else {
             event.reply(dpp::ir_update_message, "Unknown command");
         }
