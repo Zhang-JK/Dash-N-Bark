@@ -38,9 +38,9 @@ public:
     ToolInvokeResult<std::optional<AudioMixer::AudioClip>> fetchSoundFromUrl(const std::string& url);
     ToolInvokeResult<> addToSoundpad(AudioMixer::AudioClip& clip, const std::string& name,
         const std::string& user_id, const std::string& tag1, const std::string& tag2, bool fav);
-    ToolInvokeResult<std::optional<std::map<int, std::string>>> listTagsPaged(int page, int page_size);
+    ToolInvokeResult<std::optional<std::map<int, std::string>>> listTagsPaged(int page, int page_size, int& total_pages);
     ToolInvokeResult<std::optional<std::map<int, std::string>>> listSoundpadClipsPaged(
-                                int page, int page_size, const std::string& tag = "");
+                                int page, int page_size, int& total_pages, const std::string& tag = "");
     ToolInvokeResult<> playSoundpadClip(int clip_id, int volume);
 
 private:

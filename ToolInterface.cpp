@@ -123,3 +123,48 @@ ToolInterface::ToolInvokeResult<> ToolInterface::addToSoundpad(AudioMixer::Audio
         .message = std::get<1>(res)
     };
 }
+
+ToolInterface::ToolInvokeResult<std::optional<std::map<int, std::string>>> ToolInterface::listTagsPaged(
+    int page, int page_size, int& total_pages) {
+    auto res = sound_pad_manager_->listTags(page, page_size);
+    total_pages = sound_pad_manager_->countTags() / page_size +
+                  (sound_pad_manager_->countTags() % page_size == 0 ? 0 : 1);
+    return {
+        .success = res.has_value(),
+        .data = std::move(res)
+    };
+}
+
+ToolInterface::ToolInvokeResult<std::optional<std::map<int, std::string>>> ToolInterface::listSoundpadClipsPaged(
+                                int page, int page_size, int& total_pages, const std::string& tag) {
+    auto data = sound_pad_manager_->listSounds(page, page_size, tag);
+    std::map<int, std::string> res;
+    if (data) {
+        for (auto& [id, sound] : *data) {
+            res[id] = sound.name;
+        }
+        total_pages = sound_pad_manager_->countSounds(tag) / page_size +
+                      (sound_pad_manager_->countSounds(tag) % page_size == 0 ? 0 : 1);
+    }
+    return {
+        .success = data.has_value(),
+        .data = data.has_value() ? std::optional(std::move(res)) : std::nullopt
+    };
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, int volume) {
+    volume = std::clamp(volume, 1, 200);
+    auto res = sound_pad_manager_->loadAudioClip(clip_id);
+    if (!res) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "Clip not found"
+        };
+    }
+    audio_mixer_->registerAudio(res.value(), AudioMixer::AudioMixer::AUDIO_EFFECT,
+                            static_cast<float>(volume) / 100.0f);
+    return {
+        .success = true
+    };
+}

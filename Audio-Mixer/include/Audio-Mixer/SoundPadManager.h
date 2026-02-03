@@ -20,6 +20,7 @@ namespace AudioMixer {
             std::string tag1;
             std::string tag2;
             std::string path;
+            std::string user_id;
             int fav;
         };
 
@@ -31,14 +32,19 @@ namespace AudioMixer {
 
         [[nodiscard]] std::tuple<bool, std::string> saveAudioClip(AudioClip& clip, const std::string& name,
             const std::string& user_id, const std::string& tag1, const std::string& tag2="", bool fav=false) const;
-        std::optional<AudioClipPtr> loadAudioClip(int id) const;
-        std::optional<AudioClipPtr> loadAudioClip(const std::string& name) const;
+        [[nodiscard]] std::optional<AudioClip> loadAudioClip(int id) const;
+        [[nodiscard]] std::optional<AudioClip> loadAudioClip(const std::string& name) const;
+
+        [[nodiscard]] std::optional<std::map<int, std::string>> listTags(int page, int page_size) const;
+        [[nodiscard]] int countTags() const;
+        [[nodiscard]] std::optional<std::map<int, SoundEntry>> listSounds(int page, int page_size, std::string tag) const;
+        [[nodiscard]] int countSounds(const std::string& tag="") const;
 
     private:
         soci::session *sql{nullptr};
         std::string sound_save_path = "./sounds/";
 
-        static std::optional<AudioClipPtr> checkAndLoadClip(const SoundEntry& entry) ;
+        static std::optional<AudioClip> checkAndLoadClip(const SoundEntry& entry) ;
     };
 } // AudioMixer
 

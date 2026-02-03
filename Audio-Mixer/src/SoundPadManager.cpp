@@ -8,6 +8,7 @@
 #include <filesystem>
 namespace fs = std::filesystem;
 
+#include "soci/soci.h"
 #include "soci/sqlite3/soci-sqlite3.h"
 #include "spdlog/spdlog.h"
 
@@ -136,7 +137,7 @@ namespace AudioMixer {
         }
     }
 
-    std::optional<AudioClipPtr> SoundPadManager::loadAudioClip(int id) const {
+    std::optional<AudioClip> SoundPadManager::loadAudioClip(int id) const {
         // load sound entry from db
         if (!sql) {
             spdlog::error("SoundPadManager not initialized");
@@ -148,11 +149,11 @@ namespace AudioMixer {
             *sql << "SELECT id, name, "
                     "(SELECT name FROM tags WHERE id = sounds.tag1) AS tag1, "
                     "(SELECT name FROM tags WHERE id = sounds.tag2) AS tag2, "
-                    "path, fav "
+                    "path, fav, reserved1 "
                     "FROM sounds WHERE id = :id;",
                     soci::into(entry.id), soci::into(entry.name),
                     soci::into(entry.tag1, tag1_ind), soci::into(entry.tag2, tag2_ind),
-                    soci::into(entry.path), soci::into(entry.fav),
+                    soci::into(entry.path), soci::into(entry.fav), soci::into(entry.user_id),
                     soci::use(id);
             if (tag1_ind == soci::i_null) {
                 entry.tag1 = "";
@@ -167,7 +168,7 @@ namespace AudioMixer {
         }
     }
 
-    std::optional<AudioClipPtr> SoundPadManager::loadAudioClip(const std::string& name) const {
+    std::optional<AudioClip> SoundPadManager::loadAudioClip(const std::string& name) const {
         // load sound entry from db
         if (!sql) {
             spdlog::error("SoundPadManager not initialized");
@@ -179,11 +180,11 @@ namespace AudioMixer {
             *sql << "SELECT id, name, "
                     "(SELECT name FROM tags WHERE id = sounds.tag1) AS tag1, "
                     "(SELECT name FROM tags WHERE id = sounds.tag2) AS tag2, "
-                    "path, fav "
+                    "path, fav, reserved1 "
                     "FROM sounds WHERE name = :name;",
                     soci::into(entry.id), soci::into(entry.name),
                     soci::into(entry.tag1, tag1_ind), soci::into(entry.tag2, tag2_ind),
-                    soci::into(entry.path), soci::into(entry.fav),
+                    soci::into(entry.path), soci::into(entry.fav), soci::into(entry.user_id),
                     soci::use(name);
             if (tag1_ind == soci::i_null) {
                 entry.tag1 = "";
@@ -198,20 +199,128 @@ namespace AudioMixer {
         }
     }
 
-    std::optional<AudioClipPtr> SoundPadManager::checkAndLoadClip(const SoundPadManager::SoundEntry& entry) {
+    std::optional<AudioClip> SoundPadManager::checkAndLoadClip(const SoundPadManager::SoundEntry& entry) {
         // check if file exists
         if (!fs::exists(entry.path)) {
             spdlog::error("audio file not found: {}", entry.path);
             return std::nullopt;
         }
-        auto clip = std::make_shared<AudioClip>(entry.path, AudioBuffer::PCM_16BIT_STEREO_48K);
-        if (!clip->getSize() || clip->getSize() % 4 != 0) {
+        auto clip = AudioClip(entry.path, AudioBuffer::PCM_16BIT_STEREO_48K);
+        if (!clip.getSize() || clip.getSize() % 4 != 0) {
             spdlog::error("invalid audio clip size or format: {}", entry.path);
             return std::nullopt;
         }
         return clip;
     }
 
+    std::optional<std::map<int, std::string>> SoundPadManager::listTags(int page, int page_size) const {
+        if (!sql) {
+            spdlog::error("SoundPadManager not initialized");
+            return std::nullopt;
+        }
+        try {
+            std::map<int, std::string> tags;
+            auto offset = page * page_size;
+            soci::rowset<soci::row> rs = (sql->prepare << "SELECT id, name FROM tags LIMIT :limit OFFSET :offset;",
+                    soci::use(page_size), soci::use(offset));
+            for (const auto& row : rs) {
+                int id = row.get<int>(0);
+                std::string name = row.get<std::string>(1);
+                tags[id] = name;
+            }
+            return std::move(tags);
+        } catch (const soci::soci_error& e) {
+            spdlog::error("failed to list tags from database: {}", e.what());
+            return std::nullopt;
+        }
+    }
 
+    int SoundPadManager::countTags() const {
+        if (!sql) {
+            spdlog::error("SoundPadManager not initialized");
+            return 0;
+        }
+        try {
+            int count = 0;
+            *sql << "SELECT COUNT(*) FROM tags;", soci::into(count);
+            return count;
+        } catch (const soci::soci_error& e) {
+            spdlog::error("failed to count tags from database: {}", e.what());
+            return 0;
+        }
+    }
+
+    std::optional<std::map<int, SoundPadManager::SoundEntry>> SoundPadManager::listSounds(
+                    int page, int page_size, std::string tag) const {
+        if (!sql) {
+            spdlog::error("SoundPadManager not initialized");
+            return std::nullopt;
+        }
+        try {
+            std::map<int, SoundEntry> sounds;
+            auto offset = page * page_size;
+            soci::rowset<soci::row> rs;
+            if (tag.empty()) {
+                rs = (sql->prepare << "SELECT id, name, "
+                        "(SELECT name FROM tags WHERE id = sounds.tag1) AS tag1, "
+                        "(SELECT name FROM tags WHERE id = sounds.tag2) AS tag2, "
+                        "path, fav, reserved1 "
+                        "FROM sounds LIMIT :limit OFFSET :offset;",
+                        soci::use(page_size), soci::use(offset));
+            } else {
+                rs = (sql->prepare << "SELECT id, name, "
+                        "(SELECT name FROM tags WHERE id = sounds.tag1) AS tag1, "
+                        "(SELECT name FROM tags WHERE id = sounds.tag2) AS tag2, "
+                        "path, fav, reserved1 "
+                        "FROM sounds WHERE tag1 = (SELECT id FROM tags WHERE name = :tag) "
+                        "OR tag2 = (SELECT id FROM tags WHERE name = :tag) "
+                        "LIMIT :limit OFFSET :offset;",
+                        soci::use(tag), soci::use(page_size), soci::use(offset));
+            }
+            for (const auto& row : rs) {
+                SoundEntry entry;
+                entry.id = row.get<int>(0);
+                entry.name = row.get<std::string>(1);
+
+                soci::indicator tag1_ind = row.get_indicator(2);
+                soci::indicator tag2_ind = row.get_indicator(3);
+                soci::indicator user_ind = row.get_indicator(6);
+
+                entry.tag1 = (tag1_ind == soci::i_null) ? std::string() : row.get<std::string>(2);
+                entry.tag2 = (tag2_ind == soci::i_null) ? std::string() : row.get<std::string>(3);
+
+                entry.path = row.get<std::string>(4);
+                entry.fav = row.get<int>(5);
+                entry.user_id = (user_ind == soci::i_null) ? std::string() : row.get<std::string>(6);
+
+                sounds[entry.id] = entry;
+            }
+            return std::move(sounds);
+        } catch (const soci::soci_error& e) {
+            spdlog::error("failed to list sounds from database: {}", e.what());
+            return std::nullopt;
+        }
+    }
+
+    int SoundPadManager::countSounds(const std::string& tag) const {
+        if (!sql) {
+            spdlog::error("SoundPadManager not initialized");
+            return 0;
+        }
+        try {
+            int count = 0;
+            if (tag.empty()) {
+                *sql << "SELECT COUNT(*) FROM sounds;", soci::into(count);
+            } else {
+                *sql << "SELECT COUNT(*) FROM sounds WHERE tag1 = (SELECT id FROM tags WHERE name = :tag) "
+                        "OR tag2 = (SELECT id FROM tags WHERE name = :tag);",
+                        soci::into(count), soci::use(tag);
+            }
+            return count;
+        } catch (const soci::soci_error& e) {
+            spdlog::error("failed to count sounds from database: {}", e.what());
+            return 0;
+        }
+    }
 
 } // AudioMixer
