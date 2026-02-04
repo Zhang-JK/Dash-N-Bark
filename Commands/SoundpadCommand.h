@@ -41,7 +41,7 @@ private:
         command_uid_.reset();
     }
 
-    [[nodiscard]] std::vector<dpp::component> build_soundpad_component(bool isTag = false, int items_per_row = 3) const {
+    [[nodiscard]] std::vector<dpp::component> build_soundpad_component(bool isTag = false, int items_per_row = 5) const {
         if (!soundpad_mappings_ || soundpad_mappings_->empty() || !command_uid_) {
             return {}; // return empty vector if no mappings
         }
