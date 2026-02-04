@@ -20,7 +20,11 @@ private:
     std::optional<std::string> command_uid_;
     int soundpad_volume_ = 100;
 
+    #ifdef NDEBUG
+    static constexpr int PAGE_SIZE = 15;
+    #else
     static constexpr int PAGE_SIZE = 3;
+    #endif
 
     static auto random_gen_id(int len=4) -> std::string {
         static constexpr  char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
