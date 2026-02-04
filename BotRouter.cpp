@@ -77,6 +77,11 @@ BotRouter::~BotRouter() {
 
 void BotRouter::startBgTask() {
     using namespace std::chrono;
+    #ifdef NDEBUG
+    static constexpr int VOICE_IDLE_TIMEOUT_SEC = 600;
+    #else
+    static constexpr int VOICE_IDLE_TIMEOUT_SEC = 60;
+    #endif
     auto bg_ticker = ex::schedule(pool_.get_scheduler())
         | ex::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop
@@ -96,6 +101,9 @@ void BotRouter::startBgTask() {
                 auto sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                 bool init = true;
 
+                auto max_idle_count = VOICE_IDLE_TIMEOUT_SEC * 1000 / bg_task_cycle_ms_;
+                int idle_count = 0;
+
                 while (!token.stop_requested()) {
                     if (token.stop_requested()) break;
                     try {
@@ -103,6 +111,7 @@ void BotRouter::startBgTask() {
                             auto local_voice_conn = client->get_voice(serving_guild_id.value());
                             auto audio = tool_->stepAudioMixer(step_size);
                             if (local_voice_conn && audio) {
+                                idle_count = 0;
                                 if (local_voice_conn->voiceclient && local_voice_conn->voiceclient->is_ready()) {
                                     local_voice_conn->voiceclient->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
                                     if (init) {
@@ -122,8 +131,19 @@ void BotRouter::startBgTask() {
                             } else {
                                 if (!init) {
                                     spdlog::info("client disconnected voice");
+                                    idle_count = 0;
                                     tool_->clearAllAudio();
                                     init = true;
+                                }
+                                if (local_voice_conn) {
+                                    idle_count++;
+                                    if (idle_count >= max_idle_count) {
+                                        spdlog::info("Voice connection idle for too long, disconnecting...");
+                                        client->disconnect_voice(serving_guild_id.value());
+                                        idle_count = 0;
+                                        tool_->clearAllAudio();
+                                        init = true;
+                                    }
                                 }
                                 sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                             }
