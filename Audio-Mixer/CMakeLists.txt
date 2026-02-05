@@ -22,7 +22,9 @@ endif()
 
 add_library(audio_mixer
   ${AUDIO_MIXER_SOURCES}
-  ${AUDIO_MIXER_HEADERS} # headers can be listed for IDE visibility (optional)
+  ${AUDIO_MIXER_HEADERS}
+        src/RecoderSession.cpp
+        include/Audio-Mixer/RecoderSession.h # headers can be listed for IDE visibility (optional)
 )
 
 # Expose include directory to consumers

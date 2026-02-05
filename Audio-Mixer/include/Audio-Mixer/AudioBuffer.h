@@ -18,6 +18,7 @@ namespace AudioMixer {
         };
 
         AudioBuffer(const std::string& file_path, AudioFormat format);
+        AudioBuffer(const uint8_t* data, size_t size);
         AudioBuffer(size_t size);
         ~AudioBuffer();
 
@@ -26,9 +27,9 @@ namespace AudioMixer {
         [[nodiscard]] size_t getSize() const;
     private:
         // audio info
-        uint8_t *data;
-        size_t size;
-        AudioFormat format;
+        uint8_t *data_;
+        size_t size_;
+        AudioFormat format_;
 
         friend class AudioMixer;
         [[nodiscard]] uint8_t *getDataWritable() const;
