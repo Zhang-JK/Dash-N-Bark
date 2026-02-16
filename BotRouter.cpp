@@ -87,12 +87,16 @@ void BotRouter::startBgTask() {
             // Return a sender that performs the loop
             return ex::just() | ex::then([this, token]() {
                 dpp::discord_client* client = nullptr;
+                std::mutex client_mutex;
+                dpp::snowflake only_channel_id = 0;
                 // todo: support multi instances
                 std::optional<dpp::snowflake> serving_guild_id = std::nullopt;
-                pbot_->on_voice_ready([&client, &serving_guild_id](const dpp::voice_ready_t& event) {
+                pbot_->on_voice_ready([&client, &serving_guild_id, &client_mutex, &only_channel_id](const dpp::voice_ready_t& event) {
+                    std::lock_guard<std::mutex> lg(client_mutex);
                     spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
                     client = event.from();
                     serving_guild_id = event.voice_client->server_id;
+                    only_channel_id = event.voice_client->channel_id;
                 });
 
                 // cycle_ms * sample_rate * bytes_per_sample * channels
@@ -107,10 +111,11 @@ void BotRouter::startBgTask() {
                 while (!token.stop_requested()) {
                     if (token.stop_requested()) break;
                     try {
+                        std::lock_guard<std::mutex> lg(client_mutex);
                         if (client && serving_guild_id) {
                             auto local_voice_conn = client->get_voice(serving_guild_id.value());
                             auto audio = tool_->stepAudioMixer(step_size);
-                            if (local_voice_conn && audio) {
+                            if (local_voice_conn && only_channel_id && audio) {
                                 idle_count = 0;
                                 if (local_voice_conn->voiceclient && local_voice_conn->voiceclient->is_ready()) {
                                     local_voice_conn->voiceclient->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
@@ -130,10 +135,12 @@ void BotRouter::startBgTask() {
                                 }
                             } else {
                                 if (!init) {
-                                    spdlog::info("client disconnected voice");
                                     idle_count = 0;
-                                    tool_->clearAllAudio();
                                     init = true;
+                                    if (!local_voice_conn || !only_channel_id) {
+                                        spdlog::info("client disconnected voice");
+                                        tool_->clearAllAudio();
+                                    }
                                 }
                                 if (local_voice_conn) {
                                     idle_count++;
