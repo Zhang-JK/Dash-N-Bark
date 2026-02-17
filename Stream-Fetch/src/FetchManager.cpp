@@ -38,6 +38,14 @@ namespace StreamFetch {
             std::string vid;
             int sub_index = 1;          // starts from 1 not 0
             size_t pos = url.find("video/");
+            if (pos == std::string::npos) {
+                cpr::Response r = cpr::Head(cpr::Url{url});
+                std::string distinct_url = r.url.str();
+                if (distinct_url != url && distinct_url.find("video/") != std::string::npos) {
+                  return fetchFromURL(distinct_url);
+                }
+                spdlog::info("bilibili url invalid {}", url);
+            }
             if (pos != std::string::npos) {
                 size_t start = pos + 6;
                 size_t end = url.find_first_of("/?", start);
