@@ -258,7 +258,7 @@ namespace StreamFetch {
 
                 #if defined(_DEBUG) || defined(DEBUG) || !defined(NDEBUG)
                 #else
-                std::string cmd = cmd + " > /dev/null 2>&1";
+                cmd = cmd + " > /dev/null 2>&1";
                 #endif
                 int ret = std::system(cmd.c_str());
 
