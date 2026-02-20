@@ -38,7 +38,14 @@ namespace StreamFetch {
             std::string vid;
             int sub_index = 1;          // starts from 1 not 0
             size_t pos = url.find("video/");
-            if (pos != std::string::npos) {
+            if (pos == std::string::npos) {
+                cpr::Response r = cpr::Head(cpr::Url{url});
+                std::string distinct_url = r.url.str();
+                if (distinct_url != url && distinct_url.find("video/") != std::string::npos) {
+                  return fetchFromURL(distinct_url);
+                }
+                spdlog::info("bilibili url invalid {}", url);
+            } else {
                 size_t start = pos + 6;
                 size_t end = url.find_first_of("/?", start);
                 vid = url.substr(start, end - start);
@@ -55,12 +62,59 @@ namespace StreamFetch {
                 }
                 return saveBilibiliVideo(vid, sub_index);
             }
+        } else if (url.find("youtube") != std::string::npos || url.find("youtu.be") != std::string::npos) {
+            size_t pos = url.find("v=");
+            if (pos == std::string::npos) {
+                cpr::Response r = cpr::Head(cpr::Url{url});
+                std::string distinct_url = r.url.str();
+                if (distinct_url != url && distinct_url.find("v=") != std::string::npos) {
+                    return fetchFromURL(distinct_url);
+                }
+                spdlog::info("youtube url invalid {}", url);
+            } else {
+                auto start = pos + 2;
+                auto end = url.find_first_of("&?", start);
+                std::string vid = url.substr(start, end - start);
+                return saveYoutubeVideo(vid);
+            }
+        } else {
+            spdlog::info("unsupported url {}", url);
         }
         return {-1, error_code_and_msg[-1]};
     }
 
-
     // private methods
+    FetchManager::StreamFetchResult FetchManager::saveYoutubeVideo(const std::string &vid) const {
+        auto download_url = "https://www.youtube.com/watch?v=" + vid;
+        auto full_save_path = baseSavePath + "ytb-" + vid + ".m4a";
+
+        auto savePathReal = collectAndCache(full_save_path, VideoPlatform::YOUTUBE, download_url);
+        if (!savePathReal.has_value()) {
+            return {-4, error_code_and_msg[-4]};
+        }
+
+        std::string title = vid;
+        int duration = 0;
+        std::filesystem::path jsonPath = std::filesystem::path(savePathReal.value()).replace_extension(".m4a.info.json");
+        if (std::filesystem::exists(jsonPath)) {
+            try {
+                std::ifstream i(jsonPath);
+                nlohmann::json j;
+                i >> j;
+                if (j.contains("title")) {
+                    title = j["title"].get<std::string>();
+                }
+                if (j.contains("duration")) {
+                    duration = j["duration"].get<int>();
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to parse YouTube metadata json: {}", e.what());
+            }
+        }
+
+        return {0, "success", title, duration, savePathReal.value(), vid, ""};
+    }
+
     FetchManager::StreamFetchResult FetchManager::saveBilibiliVideo(const std::string &vid, int sub_index) const {
         // if vid begins with "BV", use bvid parameter, else use aid parameter
         cpr::Response r = cpr::Get(cpr::Url{"https://api.bilibili.com/x/web-interface/wbi/view"},
@@ -152,13 +206,13 @@ namespace StreamFetch {
             spdlog::info("cache hit for file {}", filename);
             return convertM4S2PCM(filename);
         }
-        // download file
-        auto fout = std::ofstream(filename, std::ios::binary);
-        if (!fout) {
-            return {};
-        }
+
         switch (platform) {
             case VideoPlatform::BILIBILI: {
+                auto fout = std::ofstream(filename, std::ios::binary);
+                if (!fout) {
+                    return {};
+                }
                 cpr::Response download_response = cpr::Get(cpr::Url{url},
                     cpr::Header{
                         {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -193,7 +247,32 @@ namespace StreamFetch {
                 return convertM4S2PCM(filename);
             }
             case VideoPlatform::YOUTUBE: {
-                throw std::runtime_error("Not implemented yet");
+                // constructing command for yt-dlp
+                // timeout 30s bin/yt-dlp_linux [url] -o [baseSavePath/filename] -x --audio-format m4a --audio-quality 0 --write-info-json
+                std::filesystem::path fpath(filename);
+                std::string cmd = "timeout 30s ./bin/yt-dlp_linux \"" + url + "\" -P \"" +
+                    fpath.parent_path().string() + "\" -o \"" + fpath.filename().string() +
+                    "\" -x --audio-format m4a --audio-quality 0 --write-info-json";
+
+                spdlog::debug("executing yt-dlp command: {}", cmd);
+
+                #if defined(_DEBUG) || defined(DEBUG) || !defined(NDEBUG)
+                #else
+                cmd = cmd + " > /dev/null 2>&1";
+                #endif
+                int ret = std::system(cmd.c_str());
+
+                if (ret != 0) {
+                    spdlog::error("yt-dlp failed with exit code: {}", ret);
+                    return {};
+                }
+
+                // Check if the expected file exists (filename is passed as "ytb-VID.m4a", need full path)
+                if (!std::filesystem::exists(filename)) {
+                    spdlog::error("yt-dlp finished but file not found: {}", filename);
+                    return {};
+                }
+                return convertM4S2PCM(filename);
             }
             default: {
                 return {};

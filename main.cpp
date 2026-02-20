@@ -53,6 +53,12 @@ int main() {
         return 1;
     }
 
+    std::string yt_dlp_path = "bin/yt-dlp_linux";
+    if (!std::filesystem::exists(yt_dlp_path)) {
+        spdlog::error("{} not found. Please ensure the binary exists.", yt_dlp_path);
+        return 1;
+    }
+
     spdlog::info("Launching bot...");
     BotRouter botRouter(token, GLOBAL_WORKING_DIR);
     botRouter.startBgTask();

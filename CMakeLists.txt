@@ -46,6 +46,22 @@ add_executable(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)
 
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(NOT EXISTS ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux)
+    message(STATUS "Downloading yt-dlp_linux...")
+    file(DOWNLOAD "https://github.com/yt-dlp/yt-dlp/releases/download/2026.02.04/yt-dlp_linux"
+            ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux
+            SHOW_PROGRESS
+            STATUS download_status
+    )
+    list(GET download_status 0 status_code)
+    list(GET download_status 1 status_string)
+    if(NOT status_code EQUAL 0)
+        message(WARNING "Download failed with status: ${status_code} - ${status_string}")
+    endif()
+endif()
+file(CHMOD ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
 install(TARGETS ${PROJECT_NAME} dpp stdexec audio_mixer spdlog stream_fetch nlohmann_json
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib)
