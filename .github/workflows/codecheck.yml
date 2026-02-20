@@ -1,0 +1,16 @@
+on: [push]
+
+jobs:
+  check-file-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for restricted file types
+        run: |
+          for ext in mp3 ogg m4s m4a pcm json info; do
+            if find . -name "*.$ext" | grep -q .; then
+              echo "Error: Found restricted file type: .$ext"
+              find . -name "*.$ext"
+              exit 1
+            fi
+          done
