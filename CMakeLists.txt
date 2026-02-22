@@ -55,7 +55,7 @@ if(NOT EXISTS ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux)
             STATUS download_status
     )
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        install(PROGRAMS ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux DESTINATION bin/bin)
+        install(PROGRAMS ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux DESTINATION bin)
     endif()
     list(GET download_status 0 status_code)
     list(GET download_status 1 status_string)
