@@ -13,6 +13,14 @@
 #include "spdlog/spdlog.h"
 
 namespace StreamFetch {
+    #if defined(_DEBUG) || defined(DEBUG) || !defined(NDEBUG)
+    #define GLOBAL_WORKING_DIR "../testdata/"
+    #define GLOBAL_CONFIG_PATH "../testdata/config.json"
+    #else
+    #define GLOBAL_WORKING_DIR "./data/"
+    #define GLOBAL_CONFIG_PATH "config.json"
+    #endif
+
     static std::map<int, std::string> error_code_and_msg = {
             {-1, "url not valid"},
             {-2, "authentication failed"},
@@ -252,7 +260,7 @@ namespace StreamFetch {
                 std::filesystem::path fpath(filename);
                 std::string cmd = "timeout 30s ./bin/yt-dlp_linux \"" + url + "\" -P \"" +
                     fpath.parent_path().string() + "\" -o \"" + fpath.filename().string() +
-                    "\" -x --audio-format m4a --audio-quality 0 --write-info-json";
+                    "\" -x --audio-format m4a --audio-quality 0 --write-info-json --cookies " + GLOBAL_WORKING_DIR + "cookies.txt";
 
                 spdlog::debug("executing yt-dlp command: {}", cmd);
 

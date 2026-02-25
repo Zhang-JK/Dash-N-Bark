@@ -69,16 +69,24 @@ jobs:
           ls -lh deploy.zip
 
           # Copy zip to server
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no deploy.zip ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }}:~/deploys/Dash-N-Bark/
+          for i in $(seq 1 20); do
+            scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -P ${{ secrets.HOST_PORT }} deploy.zip ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }}:~/deploys/Dash-N-Bark/ && break
+            echo "SCP attempt $i failed, retrying..."
+            sleep 30
+          done
 
           # Kill previous instance, extract, and start new one
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF'
-            pkill -f Dash-N-Bark || true
-            sleep 20
-            cd ~/deploys/Dash-N-Bark
-            unzip -q -o deploy.zip
-            rm deploy.zip
-            mkdir -p logs
-            LD_LIBRARY_PATH=~/deploys/Dash-N-Bark/lib nohup ./bin/Dash-N-Bark > "logs/output_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
-            echo "Deployment complete."
+          for i in $(seq 1 20); do
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -p ${{ secrets.HOST_PORT }} ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF' && break
+              pkill -f Dash-N-Bark || true
+              sleep 20
+              cd ~/deploys/Dash-N-Bark
+              unzip -q -o deploy.zip
+              rm deploy.zip
+              mkdir -p logs
+              LD_LIBRARY_PATH=~/deploys/Dash-N-Bark/lib nohup ./bin/Dash-N-Bark > "logs/output_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
+              echo "Deployment complete."
           EOF
+            echo "SSH attempt $i failed, retrying..."
+            sleep 30
+          done
