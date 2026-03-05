@@ -77,11 +77,17 @@ BotRouter::~BotRouter() {
 
 void BotRouter::startBgTask() {
     using namespace std::chrono;
+    pbot_->on_voice_receive([&](const dpp::voice_receive_t &event) {
+        spdlog::debug("=");
+        tool_->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
+    });
+
     #ifdef NDEBUG
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 600;
     #else
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 60;
     #endif
+
     auto bg_ticker = ex::schedule(pool_.get_scheduler())
         | ex::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop

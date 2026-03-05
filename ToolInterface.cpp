@@ -11,6 +11,7 @@ ToolInterface::ToolInterface(const std::string &base) : base_path_(base)
     audio_mixer_ = std::make_shared<AudioMixer::AudioMixer>();
     sound_pad_manager_ = std::make_shared<AudioMixer::SoundPadManager>();
     sound_pad_manager_->initialize(base_path_ + "/soundpad.db", base_path_ + "/sounds");
+    is_recording_.store(false);
 }
 
 ToolInterface::~ToolInterface()
@@ -168,3 +169,11 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
         .success = true
     };
 }
+
+void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, std::string user_id) {
+    spdlog::debug("received voice data from user {}, size: {}", user_id, size);
+    if (is_recording_) {
+
+    }
+}
+

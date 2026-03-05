@@ -4,6 +4,7 @@
 
 #ifndef DASH_N_BARK_TOOLINTERFACE_H
 #define DASH_N_BARK_TOOLINTERFACE_H
+#include <atomic>
 #include <memory>
 
 #include "Audio-Mixer/SoundPadManager.h"
@@ -43,11 +44,17 @@ public:
                                 int page, int page_size, int& total_pages, const std::string& tag = "");
     ToolInvokeResult<> playSoundpadClip(int clip_id, int volume);
 
+    // recording
+    // ToolInvokeResult<> initRecordingService(std::string user_id, int duration_seconds);
+    void recordingVoiceCallback(std::vector<uint8_t> data, size_t size, std::string user_id);
+
 private:
     std::string base_path_;
     std::shared_ptr<StreamFetch::FetchManager> fetch_manager_;
     std::shared_ptr<AudioMixer::AudioMixer> audio_mixer_;
     std::shared_ptr<AudioMixer::SoundPadManager> sound_pad_manager_;
+
+    std::atomic<bool> is_recording_;
 };
 
 
