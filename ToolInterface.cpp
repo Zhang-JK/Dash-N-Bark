@@ -5,13 +5,19 @@
 #include "ToolInterface.h"
 #include <spdlog/spdlog.h>
 
-ToolInterface::ToolInterface(const std::string &base) : base_path_(base)
+#include <exec/repeat_until.hpp>
+#include <exec/start_detached.hpp>
+
+#include <utility>
+
+ToolInterface::ToolInterface(std::string base, std::shared_ptr<exec::static_thread_pool> pool)
+: base_path_(std::move(base)), ppool_(std::move(pool))
 {
     fetch_manager_ = std::make_shared<StreamFetch::FetchManager>(base_path_);
     audio_mixer_ = std::make_shared<AudioMixer::AudioMixer>();
     sound_pad_manager_ = std::make_shared<AudioMixer::SoundPadManager>();
     sound_pad_manager_->initialize(base_path_ + "/soundpad.db", base_path_ + "/sounds");
-    is_recording_.store(false);
+    recorder_sessions_ = {};
 }
 
 ToolInterface::~ToolInterface()
@@ -170,10 +176,47 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
     };
 }
 
-void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, std::string user_id) {
-    spdlog::debug("received voice data from user {}, size: {}", user_id, size);
-    if (is_recording_) {
-
+ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds) {
+    // Check if a session for this user already exists in recorder_sessions_
+    if (recorder_sessions_.find(user_id) != recorder_sessions_.end()) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "Recording session already exists for user_id"
+        };
     }
+    // Reserve an entry (default constructed session pointer); actual session initialization can be done later
+    recorder_sessions_[user_id] = std::make_shared<AudioMixer::RecorderSession>(user_id, duration_seconds, true, base_path_);
+    auto session = recorder_sessions_[user_id];
+    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds);
+    auto sched = ppool_->get_scheduler();
+    exec::timed_thread_scheduler timed_sched = timed_thread_context_.get_scheduler();
+    auto work = stdexec::schedule(sched) | stdexec::let_value(
+        [timed_sched, session, end_time] {
+            return exec::repeat_until(
+                exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
+                | stdexec::then([session, end_time] {
+                    session->streamAudio();
+                    return std::chrono::steady_clock::now() >= end_time;
+                })
+            );
+        }
+    )
+    | stdexec::upon_error([](auto&&) noexcept {})
+    | stdexec::upon_stopped([]() noexcept {});
+    exec::start_detached(std::move(work));
+    return {
+        .success = true,
+    };
+}
+
+void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id) {
+    if (recorder_sessions_.find(user_id) == recorder_sessions_.end()) {
+        spdlog::warn("Received audio data for user_id {} but no recording session exists", user_id);
+        return;
+    }
+    auto session = recorder_sessions_[user_id];
+    session->recordAudio(data.data(), size);
+    spdlog::debug("Recorded audio data for user_id {}, size: {}", user_id, size);
 }
 

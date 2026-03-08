@@ -3,6 +3,7 @@
 //
 
 #include <spdlog/spdlog.h>
+#include <exec/start_detached.hpp>
 
 #include "BotRouter.h"
 
@@ -44,9 +45,10 @@ std::function<void(const dpp::log_t&)> spdlog_logger() {
 
 BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     : botToken_(std::move(botToken)),
-      pbot_(std::make_shared<dpp::cluster>(botToken_)) {
+      pbot_(std::make_shared<dpp::cluster>(botToken_)),
+      ppool_(std::make_shared<exec::static_thread_pool>(4)) {
     pbot_->on_log(spdlog_logger());
-    tool_ = std::make_shared<ToolInterface>(workDir);
+    tool_ = std::make_shared<ToolInterface>(workDir, ppool_);
 
     this->setCmds();
     pbot_->on_ready(this->getRegisterCmdFunction());
@@ -78,7 +80,6 @@ BotRouter::~BotRouter() {
 void BotRouter::startBgTask() {
     using namespace std::chrono;
     pbot_->on_voice_receive([&](const dpp::voice_receive_t &event) {
-        spdlog::debug("=");
         tool_->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
     });
 
@@ -88,10 +89,10 @@ void BotRouter::startBgTask() {
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 60;
     #endif
 
-    auto bg_ticker = ex::schedule(pool_.get_scheduler())
-        | ex::let_value([this, token = stop_src_.get_token()]() mutable {
+    auto bg_ticker = stdexec::schedule(ppool_->get_scheduler())
+        | stdexec::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop
-            return ex::just() | ex::then([this, token]() {
+            return stdexec::just() | stdexec::then([this, token]() {
                 dpp::discord_client* client = nullptr;
                 std::mutex client_mutex;
                 // todo: support multi instances
@@ -174,7 +175,7 @@ void BotRouter::startBgTask() {
             });
         });
 
-    ex::start_detached(std::move(bg_ticker));
+    exec::start_detached(std::move(bg_ticker));
 }
 
 void BotRouter::start() {
