@@ -20,7 +20,8 @@ namespace AudioMixer {
           target_duration_ms_(std::max(0, duration_seconds) * 1000),
           keep_data_(keep_data),
           target_delay_ms_(1000),
-          processing_audio_pointer_(0) {
+          processing_audio_pointer_(0),
+          is_shutting_down_(false) {
         start_time_ = std::chrono::steady_clock::now();
         if (target_duration_ms_ < 0) {
             target_duration_ms_ = 60 * 1000; // default to 1 minute
@@ -40,21 +41,27 @@ namespace AudioMixer {
 
     RecorderSession::~RecorderSession() {
         std::lock_guard lock(mutex_);
+        if (!is_shutting_down_) {
+            shutdown();
+        }
         // todo
     }
 
     void RecorderSession::recordAudio(const uint8_t* audio_data, size_t data_size) {
+        if (is_shutting_down_) {
+            return;
+        }
         std::lock_guard lock(mutex_);
         if (!audio_data || data_size == 0) {
             return;
         }
-        if (target_duration_ms_ > 0) {
-            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start_time_).count();
-            if (elapsed_ms >= target_duration_ms_) {
-                return;
-            }
-        }
+        // if (target_duration_ms_ > 0) {
+        //     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        //         std::chrono::steady_clock::now() - start_time_).count();
+        //     if (elapsed_ms >= target_duration_ms_) {
+        //         return;
+        //     }
+        // }
         auto now = std::chrono::steady_clock::now();
         auto buffer = std::make_shared<AudioBuffer>(audio_data, data_size);
         audio_queue_.push(std::make_tuple(std::move(now), std::move(buffer)));
@@ -69,6 +76,9 @@ namespace AudioMixer {
     }
 
     std::optional<AudioClip> RecorderSession::streamAudio(int len_ms) {
+        if (is_shutting_down_) {
+            return std::nullopt;
+        }
         // todo: merge two audio if to short
         std::lock_guard lock(mutex_);
         if (audio_queue_.empty()) {
@@ -98,6 +108,9 @@ namespace AudioMixer {
     }
 
     bool RecorderSession::isDone() {
+        if (is_shutting_down_) {
+            return true;
+        }
         std::lock_guard lock(mutex_);
         return
             std::chrono::duration_cast<std::chrono::milliseconds>
@@ -105,9 +118,29 @@ namespace AudioMixer {
             && audio_queue_.empty();
     }
 
+    void RecorderSession::shutdown() {
+        std::lock_guard lock(mutex_);
+        is_shutting_down_ = true;
+        while (!audio_queue_.empty()) {
+            audio_queue_.pop();
+        }
+        if (dump_file_.is_open()) {
+            try { dump_file_.close(); } catch (...) {}
+        }
+    }
+
+    std::string RecorderSession::getUserId() const {
+        return user_id_;
+    }
+
     bool RecorderSession::checkUserId(const std::string& user_id) {
         std::lock_guard lock(mutex_);
         return user_id == user_id_;
+    }
+
+    bool RecorderSession::isShuttingDown() {
+        std::lock_guard lock(mutex_);
+        return is_shutting_down_;
     }
 
 } // namespace AudioMixer

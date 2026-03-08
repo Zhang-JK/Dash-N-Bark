@@ -32,6 +32,7 @@ public:
 
     // stream audio
     ToolInvokeResult<> playAudioClip(AudioMixer::AudioClip& clip, AudioMixer::AudioMixer::SoundType type);
+    ToolInvokeResult<> playAudioFromFile(std::string path, AudioMixer::AudioMixer::SoundType type, float volume);
     ToolInvokeResult<> fetchAndEnqueuePlaylist(const std::string& url, int volume);
     ToolInvokeResult<std::optional<std::vector<std::tuple<std::string, int, int>>>> getPlaylist();
     ToolInvokeResult<std::optional<std::tuple<std::string, int, int>>> getCurrentSong();
@@ -61,6 +62,8 @@ private:
     std::shared_ptr<AudioMixer::SoundPadManager> sound_pad_manager_;
 
     std::map<std::string, std::shared_ptr<AudioMixer::RecorderSession>> recorder_sessions_;
+    // todo: better change to one for each rec session
+    std::mutex recorder_mutex_;
 };
 
 

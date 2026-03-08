@@ -3,6 +3,8 @@
 //
 
 #include "ToolInterface.h"
+
+#include <filesystem>
 #include <spdlog/spdlog.h>
 
 #include <exec/repeat_until.hpp>
@@ -33,6 +35,26 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playAudioClip(AudioMixer::Audio
         .success = true,
     };
 }
+
+ToolInterface::ToolInvokeResult<> ToolInterface::playAudioFromFile(std::string path,
+                                                                   AudioMixer::AudioMixer::SoundType type,
+                                                                   float volume)
+{
+    auto full_path = base_path_ + "/" + path;
+    if (!std::filesystem::exists(full_path)) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "File does not exist: " + full_path
+        };
+    }
+    AudioMixer::AudioClip clip(full_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K, path);
+    audio_mixer_->registerAudio(clip, type, volume);
+    return {
+        .success = true,
+    };
+}
+
 
 ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url, int volume) {
     if (volume < 1 || volume > 200) {
@@ -177,7 +199,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
 }
 
 ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds) {
-    // Check if a session for this user already exists in recorder_sessions_
+    std::lock_guard<std::mutex> lock(recorder_mutex_);
     if (recorder_sessions_.find(user_id) != recorder_sessions_.end()) {
         return {
             .success = false,
@@ -188,18 +210,28 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
     // Reserve an entry (default constructed session pointer); actual session initialization can be done later
     recorder_sessions_[user_id] = std::make_shared<AudioMixer::RecorderSession>(user_id, duration_seconds, true, base_path_);
     auto session = recorder_sessions_[user_id];
-    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds);
+    // todo: hackcode here
+    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds+1);
     auto sched = ppool_->get_scheduler();
     exec::timed_thread_scheduler timed_sched = timed_thread_context_.get_scheduler();
     auto work = stdexec::schedule(sched) | stdexec::let_value(
-        [timed_sched, session, end_time] {
+        [timed_sched, session, end_time, this] {
             return exec::repeat_until(
                 exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
                 | stdexec::then([session, end_time] {
+                    spdlog::debug("Streaming audio for, time left: {} seconds",
+                                  std::chrono::duration_cast<std::chrono::seconds>(end_time - std::chrono::steady_clock::now()).count());
                     session->streamAudio();
                     return std::chrono::steady_clock::now() >= end_time;
                 })
-            );
+            ) | stdexec::then([session, this] {
+                spdlog::info("Recording session ended, shutting down session");
+                session->shutdown();
+                {
+                    std::lock_guard<std::mutex> lock(recorder_mutex_);
+                   recorder_sessions_.erase(session->getUserId());
+                }
+            });
         }
     )
     | stdexec::upon_error([](auto&&) noexcept {})
@@ -211,12 +243,17 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
 }
 
 void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id) {
-    if (recorder_sessions_.find(user_id) == recorder_sessions_.end()) {
-        spdlog::warn("Received audio data for user_id {} but no recording session exists", user_id);
-        return;
+    spdlog::debug("Recorded audio data 111 for user_id {}, size: {}", user_id, size);
+    {
+        std::lock_guard<std::mutex> lock(recorder_mutex_);
+        spdlog::debug("Recorded audio data 222 for user_id {}, size: {}", user_id, size);
+        if (recorder_sessions_.find(user_id) == recorder_sessions_.end()) {
+            return;
+        }
+        spdlog::debug("Recorded audio data 333 for user_id {}, size: {}", user_id, size);
+        auto session = recorder_sessions_[user_id];
+        session->recordAudio(data.data(), size);
+        spdlog::debug("Recorded audio data 444 for user_id {}, size: {}", user_id, size);
     }
-    auto session = recorder_sessions_[user_id];
-    session->recordAudio(data.data(), size);
-    spdlog::debug("Recorded audio data for user_id {}, size: {}", user_id, size);
 }
 

@@ -4,6 +4,7 @@
 
 #ifndef DASH_N_BARK_RECODERSESSION_H
 #define DASH_N_BARK_RECODERSESSION_H
+#include <atomic>
 #include <chrono>
 #include <queue>
 #include <string>
@@ -21,7 +22,10 @@ namespace AudioMixer {
         void recordAudio(const uint8_t* audio_data, size_t data_size);
         std::optional<AudioClip> streamAudio(int len_ms = 60);
         bool isDone();
+        std::string getUserId() const;
         bool checkUserId(const std::string& user_id);
+        void shutdown();
+        bool isShuttingDown();
 
     private:
         std::string user_id_;
@@ -35,6 +39,7 @@ namespace AudioMixer {
         std::mutex mutex_;
         std::queue<
             std::tuple<std::chrono::time_point<std::chrono::steady_clock>, AudioBufferPtr>> audio_queue_;
+        std::atomic<bool> is_shutting_down_;
 
         void applyAudioEffects(AudioBuffer& buffer);
     };

@@ -14,6 +14,7 @@
 #include "Commands/SkipCommand.h"
 #include "Commands/SoundpadCommand.h"
 #include "Commands/AddCommand.h"
+#include "Commands/ParrotCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -274,11 +275,20 @@ void BotRouter::setCmds() {
     //     std::nullopt
     // );
 
-    // cmds_["parrot"] = std::make_tuple(
-    //     dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
-    //         .add_localization("zh-CN", "复读", "重复你的消息。"),
-    //     std::nullopt
-    // );
+    cmds_["parrot"] = std::make_tuple(
+        dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
+            .add_localization("zh-CN", "复读", "重复你的消息。")
+            .add_option(
+                dpp::command_option(dpp::co_user, "target", "User to be parroted", true)
+                    .add_localization("zh-CN", "目标用户", "要被复读的用户")
+            ).add_option(
+                dpp::command_option(dpp::co_integer, "duration", "Duration of parroting in seconds (default 30)", false)
+                    .add_localization("zh-CN", "持续时间", "复读持续时间，单位为秒 (默认 30)")
+                    .set_min_value(5)
+                    .set_max_value(120)
+            ),
+        new ParrotCommand(tool_)
+    );
     // cmds_["tts"] = std::make_tuple(
     //     dpp::slashcommand("tts", "Text to speech.", pbot_->me.id)
     //         .add_localization("zh-CN", "语音合成", "将文字转换为语音。"),
