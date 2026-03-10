@@ -48,7 +48,7 @@ public:
         tool_interface_->playAudioFromFile("system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
         tool_interface_->initRecordingService(target_user.str(), parroting_duration);
 
-        event.reply("Parroting " + dpp::find_user(target_user)->format_username() + "for "
+        event.reply("Parroting " + dpp::find_user(target_user)->format_username() + " for "
                     + std::to_string(parroting_duration) + " seconds!");
     }
 

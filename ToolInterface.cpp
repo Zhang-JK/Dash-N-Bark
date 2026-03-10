@@ -218,19 +218,16 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
         [timed_sched, session, end_time, this] {
             return exec::repeat_until(
                 exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
-                | stdexec::then([session, end_time] {
-                    spdlog::debug("Streaming audio for, time left: {} seconds",
-                                  std::chrono::duration_cast<std::chrono::seconds>(end_time - std::chrono::steady_clock::now()).count());
-                    session->streamAudio();
+                | stdexec::then([session, end_time, this] {
+                    auto local_clip = session->streamAudio();
+                    if (local_clip) {
+                        audio_mixer_->registerAudio(local_clip.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
+                    }
                     return std::chrono::steady_clock::now() >= end_time;
                 })
-            ) | stdexec::then([session, this] {
+            ) | stdexec::then([session] {
                 spdlog::info("Recording session ended, shutting down session");
                 session->shutdown();
-                {
-                    std::lock_guard<std::mutex> lock(recorder_mutex_);
-                   recorder_sessions_.erase(session->getUserId());
-                }
             });
         }
     )
@@ -243,17 +240,18 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
 }
 
 void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id) {
-    spdlog::debug("Recorded audio data 111 for user_id {}, size: {}", user_id, size);
     {
         std::lock_guard<std::mutex> lock(recorder_mutex_);
-        spdlog::debug("Recorded audio data 222 for user_id {}, size: {}", user_id, size);
         if (recorder_sessions_.find(user_id) == recorder_sessions_.end()) {
             return;
         }
-        spdlog::debug("Recorded audio data 333 for user_id {}, size: {}", user_id, size);
         auto session = recorder_sessions_[user_id];
-        session->recordAudio(data.data(), size);
-        spdlog::debug("Recorded audio data 444 for user_id {}, size: {}", user_id, size);
+        if (session->isShuttingDown()) {
+            spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
+            recorder_sessions_.erase(session->getUserId());
+        } else {
+            session->recordAudio(data.data(), size);
+        }
     }
 }
 

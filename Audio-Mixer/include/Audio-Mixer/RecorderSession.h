@@ -40,6 +40,7 @@ namespace AudioMixer {
         std::queue<
             std::tuple<std::chrono::time_point<std::chrono::steady_clock>, AudioBufferPtr>> audio_queue_;
         std::atomic<bool> is_shutting_down_;
+        int headBufferPointer_;
 
         void applyAudioEffects(AudioBuffer& buffer);
     };
