@@ -50,7 +50,7 @@ public:
     ToolInvokeResult<> playSoundpadClip(int clip_id, int volume);
 
     // recording
-    ToolInvokeResult<> initRecordingService(std::string user_id, int duration_seconds);
+    ToolInvokeResult<> initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset = AudioMixer::VoiceChanger::VoicePreset::Baby);
     void recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id);
 
 private:

@@ -11,6 +11,7 @@
 #include <fstream>
 
 #include "AudioBuffer.h"
+#include "VoiceChanger.h"
 
 namespace AudioMixer {
 
@@ -27,6 +28,10 @@ namespace AudioMixer {
         void shutdown();
         bool isShuttingDown();
 
+        void setVoiceChangerEnabled(bool enabled);
+        void setVoiceChangerPreset(VoiceChanger::VoicePreset preset);
+        void setVoiceChangerPitch(double pitch);
+
     private:
         std::string user_id_;
         int target_duration_ms_;
@@ -41,6 +46,8 @@ namespace AudioMixer {
             std::tuple<std::chrono::time_point<std::chrono::steady_clock>, AudioBufferPtr>> audio_queue_;
         std::atomic<bool> is_shutting_down_;
         int headBufferPointer_;
+
+        std::shared_ptr<VoiceChanger> voice_changer_;
 
         void applyAudioEffects(AudioBuffer& buffer);
     };

@@ -6,6 +6,7 @@
 #define DASH_N_BARK_PARROTCOMMAND_H
 
 #include "CommandBase.h"
+#include "Audio-Mixer/VoiceChanger.h"
 
 class ParrotCommand : public CommandBase {
 public:
@@ -24,6 +25,16 @@ public:
         auto target_user = std::get<dpp::snowflake>(event.get_parameter("target"));
         auto parroting_duration = std::holds_alternative<int64_t>(event.get_parameter("duration"))
                 ? std::get<int64_t>(event.get_parameter("duration")) : 30;
+        
+        auto voice_preset_str = std::holds_alternative<std::string>(event.get_parameter("voice_preset"))
+                ? std::get<std::string>(event.get_parameter("voice_preset")) : "baby";
+        
+        AudioMixer::VoiceChanger::VoicePreset voice_preset = AudioMixer::VoiceChanger::VoicePreset::Baby;
+        auto preset_map = AudioMixer::VoiceChanger::getPresetMap();
+        auto it = preset_map.find(voice_preset_str);
+        if (it != preset_map.end()) {
+            voice_preset = it->second;
+        }
 
         // check if target is bot itself
         if (target_user == bot->me.id) {
@@ -46,10 +57,10 @@ public:
         }
 
         tool_interface_->playAudioFromFile("system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
-        tool_interface_->initRecordingService(target_user.str(), parroting_duration);
+        tool_interface_->initRecordingService(target_user.str(), parroting_duration, voice_preset);
 
-        event.reply("Parroting " + dpp::find_user(target_user)->format_username() + " for "
-                    + std::to_string(parroting_duration) + " seconds!");
+        event.reply("Parroting " + dpp::find_user(target_user)->format_username() + " with " 
+                    + voice_preset_str + " voice for " + std::to_string(parroting_duration) + " seconds!");
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {

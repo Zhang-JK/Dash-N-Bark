@@ -120,6 +120,22 @@ namespace AudioMixer {
             return std::nullopt;
         }
 
+        if (voice_changer_) {
+            auto processed = voice_changer_->process(combined_buffer->getData(), bytes_written);
+            if (processed && !processed->empty()) {
+                size_t processed_sample_count = processed->size();
+                size_t processed_size = processed_sample_count * sizeof(int16_t);
+                auto output_buffer = std::make_shared<AudioBuffer>(processed_size);
+                auto* output_data = reinterpret_cast<int16_t*>(output_buffer->getData());
+                for (size_t i = 0; i < processed_sample_count; ++i) {
+                    float sample = (*processed)[i];
+                    sample = std::clamp(sample, -1.0f, 1.0f);
+                    output_data[i] = static_cast<int16_t>(sample * 32767.0f);
+                }
+                return AudioClip(output_buffer, 0, processed_size);
+            }
+        }
+
         return AudioClip(combined_buffer, 0, bytes_written);
     }
 
@@ -157,6 +173,26 @@ namespace AudioMixer {
     bool RecorderSession::isShuttingDown() {
         std::lock_guard lock(mutex_);
         return is_shutting_down_;
+    }
+
+    void RecorderSession::setVoiceChangerEnabled(bool enabled) {
+        if (!voice_changer_ && enabled) {
+            voice_changer_ = std::make_shared<VoiceChanger>();
+        }
+    }
+
+    void RecorderSession::setVoiceChangerPreset(VoiceChanger::VoicePreset preset) {
+        if (!voice_changer_) {
+            voice_changer_ = std::make_shared<VoiceChanger>();
+        }
+        voice_changer_->setPreset(preset);
+    }
+
+    void RecorderSession::setVoiceChangerPitch(double pitch) {
+        if (!voice_changer_) {
+            voice_changer_ = std::make_shared<VoiceChanger>();
+        }
+        voice_changer_->setPitch(pitch);
     }
 
 } // namespace AudioMixer

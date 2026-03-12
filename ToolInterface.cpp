@@ -198,7 +198,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
     };
 }
 
-ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds) {
+ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset) {
     std::lock_guard<std::mutex> lock(recorder_mutex_);
     if (recorder_sessions_.find(user_id) != recorder_sessions_.end()) {
         return {
@@ -210,6 +210,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
     // Reserve an entry (default constructed session pointer); actual session initialization can be done later
     recorder_sessions_[user_id] = std::make_shared<AudioMixer::RecorderSession>(user_id, duration_seconds, true, base_path_);
     auto session = recorder_sessions_[user_id];
+    session->setVoiceChangerPreset(voice_preset);
     // todo: hackcode here
     auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds+1);
     auto sched = ppool_->get_scheduler();
@@ -250,6 +251,7 @@ void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t siz
             spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
             recorder_sessions_.erase(session->getUserId());
         } else {
+            spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
             session->recordAudio(data.data(), size);
         }
     }
