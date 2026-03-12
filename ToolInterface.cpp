@@ -220,15 +220,20 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
             return exec::repeat_until(
                 exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
                 | stdexec::then([session, end_time, this] {
+                    // spdlog::debug("Stream left: {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(end_time - std::chrono::steady_clock::now()).count());
                     auto local_clip = session->streamAudio();
                     if (local_clip) {
-                        audio_mixer_->registerAudio(local_clip.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
+                        audio_mixer_->registerAudio(local_clip.value(), AudioMixer::AudioMixer::AUDIO_EFFECT, 0.8);
                     }
                     return std::chrono::steady_clock::now() >= end_time;
                 })
-            ) | stdexec::then([session] {
-                spdlog::info("Recording session ended, shutting down session");
+            ) | stdexec::then([session, this] {
+                spdlog::info("Recording session ended, shutting down session for user_id: {}", session->getUserId());
                 session->shutdown();
+                {
+                    std::lock_guard<std::mutex> lock(recorder_mutex_);
+                    recorder_sessions_.erase(session->getUserId());
+                }
             });
         }
     )
@@ -249,9 +254,8 @@ void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t siz
         auto session = recorder_sessions_[user_id];
         if (session->isShuttingDown()) {
             spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
-            recorder_sessions_.erase(session->getUserId());
         } else {
-            spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
+            // spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
             session->recordAudio(data.data(), size);
         }
     }

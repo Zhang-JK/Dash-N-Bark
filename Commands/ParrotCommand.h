@@ -27,9 +27,9 @@ public:
                 ? std::get<int64_t>(event.get_parameter("duration")) : 30;
         
         auto voice_preset_str = std::holds_alternative<std::string>(event.get_parameter("voice_preset"))
-                ? std::get<std::string>(event.get_parameter("voice_preset")) : "baby";
+                ? std::get<std::string>(event.get_parameter("voice_preset")) : "little_girl";
         
-        AudioMixer::VoiceChanger::VoicePreset voice_preset = AudioMixer::VoiceChanger::VoicePreset::Baby;
+        AudioMixer::VoiceChanger::VoicePreset voice_preset = AudioMixer::VoiceChanger::VoicePreset::LittleGirl;
         auto preset_map = AudioMixer::VoiceChanger::getPresetMap();
         auto it = preset_map.find(voice_preset_str);
         if (it != preset_map.end()) {
@@ -56,8 +56,12 @@ public:
             return;
         }
 
+        auto rec_result = tool_interface_->initRecordingService(target_user.str(), parroting_duration, voice_preset);
+        if (!rec_result.success) {
+            event.reply("Failed to start recording: " + rec_result.message);
+            return;
+        }
         tool_interface_->playAudioFromFile("system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
-        tool_interface_->initRecordingService(target_user.str(), parroting_duration, voice_preset);
 
         event.reply("Parroting " + dpp::find_user(target_user)->format_username() + " with " 
                     + voice_preset_str + " voice for " + std::to_string(parroting_duration) + " seconds!");

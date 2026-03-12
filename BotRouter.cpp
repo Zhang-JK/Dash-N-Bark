@@ -286,6 +286,15 @@ void BotRouter::setCmds() {
                     .add_localization("zh-CN", "持续时间", "复读持续时间，单位为秒 (默认 30)")
                     .set_min_value(5)
                     .set_max_value(120)
+            ).add_option(
+                dpp::command_option(dpp::co_string, "voice_preset", "Voice preset (default: little_girl)", false)
+                    .add_localization("zh-CN", "声音预设", "声音预设 (默认: little_girl)")
+                    .add_choice(dpp::command_option_choice("little_girl", "little_girl"))
+                    .add_choice(dpp::command_option_choice("baby", "baby"))
+                    .add_choice(dpp::command_option_choice("chipmunk", "chipmunk"))
+                    .add_choice(dpp::command_option_choice("deep_voice", "deep_voice"))
+                    .add_choice(dpp::command_option_choice("robot", "robot"))
+                    .add_choice(dpp::command_option_choice("none", "none"))
             ),
         new ParrotCommand(tool_)
     );

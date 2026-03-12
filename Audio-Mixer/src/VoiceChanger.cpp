@@ -115,8 +115,6 @@ namespace AudioMixer {
             pitch_
         );
 
-        spdlog::debug("VoiceChanger: input frames={}, output frames={}, pitch={}", frameCount, outputFrameCount, pitch_);
-        
         return outputFrameCount > 0;
     }
 
