@@ -16,3 +16,6 @@
 [submodule "libs/json"]
 	path = libs/json
 	url = git@github.com:nlohmann/json.git
+[submodule "libs/bungee"]
+	path = libs/bungee
+	url = git@github.com:bungee-audio-stretch/bungee.git
