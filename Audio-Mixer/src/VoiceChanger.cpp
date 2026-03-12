@@ -173,11 +173,11 @@ namespace AudioMixer {
             outputPointers[c] = floatOutput.data() + c * kChunkFrames;
         }
 
-        stream_->process(
+        outputFrameCount = stream_->process(
             inputPointers,
             outputPointers,
             0,
-            0,
+            0.0,
             pitch_
         );
 

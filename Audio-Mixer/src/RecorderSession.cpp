@@ -25,13 +25,15 @@ namespace AudioMixer {
           is_shutting_down_(false),
           headBufferPointer_(0) {
         start_time_ = std::chrono::steady_clock::now();
-        if (target_duration_ms_ < 0) {
-            target_duration_ms_ = 60 * 1000; // default to 1 minute
-        }
         if (keep_data_) {
             auto now = std::chrono::system_clock::now();
             std::time_t t = std::chrono::system_clock::to_time_t(now);
-            std::tm tm = *std::localtime(&t);
+            std::tm tm{};
+#if defined(_WIN32)
+            ::localtime_s(&tm, &t);
+#else
+            ::localtime_r(&t, &tm);
+#endif
             std::string user_dir = base_path + "/user_rec/" + user_id_;
             std::filesystem::create_directories(user_dir);
             std::ostringstream oss;
