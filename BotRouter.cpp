@@ -80,8 +80,8 @@ BotRouter::~BotRouter() {
 
 void BotRouter::startBgTask() {
     using namespace std::chrono;
-    pbot_->on_voice_receive([&](const dpp::voice_receive_t &event) {
-        tool_->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
+    pbot_->on_voice_receive([tool = tool_](const dpp::voice_receive_t &event) {
+        tool->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
     });
 
     #ifdef NDEBUG

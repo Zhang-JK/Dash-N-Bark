@@ -12,7 +12,7 @@
 #include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>
 
-// for those hwho will be in std standard
+// for those who will be in std standard
 namespace ex = stdexec;
 
 template <typename T>

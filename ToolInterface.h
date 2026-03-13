@@ -4,7 +4,10 @@
 
 #ifndef DASH_N_BARK_TOOLINTERFACE_H
 #define DASH_N_BARK_TOOLINTERFACE_H
+#include <map>
 #include <memory>
+#include <mutex>
+#include <string>
 
 #include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>

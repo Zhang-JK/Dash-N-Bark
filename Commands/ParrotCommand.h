@@ -63,7 +63,12 @@ public:
         }
         tool_interface_->playAudioFromFile("system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
 
-        event.reply("Parroting " + dpp::find_user(target_user)->format_username() + " with " 
+        dpp::user* target_user_obj = dpp::find_user(target_user);
+        std::string target_display_name = target_user_obj
+            ? target_user_obj->format_username()
+            : ("<@" + target_user.str() + ">");
+
+        event.reply("Parroting " + target_display_name + " with " 
                     + voice_preset_str + " voice for " + std::to_string(parroting_duration) + " seconds!");
     }
 

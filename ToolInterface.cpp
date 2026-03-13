@@ -229,11 +229,11 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
                 })
             ) | stdexec::then([session, this] {
                 spdlog::info("Recording session ended, shutting down session for user_id: {}", session->getUserId());
-                session->shutdown();
                 {
                     std::lock_guard<std::mutex> lock(recorder_mutex_);
                     recorder_sessions_.erase(session->getUserId());
                 }
+                session->shutdown();
             });
         }
     )
@@ -246,18 +246,24 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
 }
 
 void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id) {
+    // First, grab a shared_ptr to the session under recorder_mutex_, then
+    // release the lock before calling any RecorderSession methods to avoid
+    // potential lock-order inversions.
+    std::shared_ptr<AudioMixer::RecorderSession> session;
     {
         std::lock_guard<std::mutex> lock(recorder_mutex_);
-        if (recorder_sessions_.find(user_id) == recorder_sessions_.end()) {
+        auto it = recorder_sessions_.find(user_id);
+        if (it == recorder_sessions_.end()) {
             return;
         }
-        auto session = recorder_sessions_[user_id];
-        if (session->isShuttingDown()) {
-            spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
-        } else {
-            // spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
-            session->recordAudio(data.data(), size);
-        }
+        session = it->second;
+    }
+
+    if (session->isShuttingDown()) {
+        spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
+    } else {
+        // spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
+        session->recordAudio(data.data(), size);
     }
 }
 

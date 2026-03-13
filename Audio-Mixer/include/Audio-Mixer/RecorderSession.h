@@ -2,10 +2,11 @@
 // Created by laojk on 2026-02-05.
 //
 
-#ifndef DASH_N_BARK_RECODERSESSION_H
-#define DASH_N_BARK_RECODERSESSION_H
+#ifndef DASH_N_BARK_RECORDERSESSION_H
+#define DASH_N_BARK_RECORDERSESSION_H
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <queue>
 #include <string>
 #include <fstream>
@@ -54,4 +55,4 @@ namespace AudioMixer {
 
 } // namespace AudioMixer
 
-#endif //DASH_N_BARK_RECODERSESSION_H
+#endif //DASH_N_BARK_RECORDERSESSION_H
