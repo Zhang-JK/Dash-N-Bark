@@ -3,6 +3,7 @@
 //
 
 #include <spdlog/spdlog.h>
+#include <exec/start_detached.hpp>
 
 #include "BotRouter.h"
 
@@ -13,6 +14,7 @@
 #include "Commands/SkipCommand.h"
 #include "Commands/SoundpadCommand.h"
 #include "Commands/AddCommand.h"
+#include "Commands/ParrotCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -44,9 +46,10 @@ std::function<void(const dpp::log_t&)> spdlog_logger() {
 
 BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     : botToken_(std::move(botToken)),
-      pbot_(std::make_shared<dpp::cluster>(botToken_)) {
+      pbot_(std::make_shared<dpp::cluster>(botToken_)),
+      ppool_(std::make_shared<exec::static_thread_pool>(4)) {
     pbot_->on_log(spdlog_logger());
-    tool_ = std::make_shared<ToolInterface>(workDir);
+    tool_ = std::make_shared<ToolInterface>(workDir, ppool_);
 
     this->setCmds();
     pbot_->on_ready(this->getRegisterCmdFunction());
@@ -77,15 +80,20 @@ BotRouter::~BotRouter() {
 
 void BotRouter::startBgTask() {
     using namespace std::chrono;
+    pbot_->on_voice_receive([tool = tool_](const dpp::voice_receive_t &event) {
+        tool->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
+    });
+
     #ifdef NDEBUG
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 600;
     #else
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 60;
     #endif
-    auto bg_ticker = ex::schedule(pool_.get_scheduler())
-        | ex::let_value([this, token = stop_src_.get_token()]() mutable {
+
+    auto bg_ticker = stdexec::schedule(ppool_->get_scheduler())
+        | stdexec::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop
-            return ex::just() | ex::then([this, token]() {
+            return stdexec::just() | stdexec::then([this, token]() {
                 dpp::discord_client* client = nullptr;
                 std::mutex client_mutex;
                 // todo: support multi instances
@@ -168,7 +176,7 @@ void BotRouter::startBgTask() {
             });
         });
 
-    ex::start_detached(std::move(bg_ticker));
+    exec::start_detached(std::move(bg_ticker));
 }
 
 void BotRouter::start() {
@@ -267,11 +275,29 @@ void BotRouter::setCmds() {
     //     std::nullopt
     // );
 
-    // cmds_["parrot"] = std::make_tuple(
-    //     dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
-    //         .add_localization("zh-CN", "复读", "重复你的消息。"),
-    //     std::nullopt
-    // );
+    cmds_["parrot"] = std::make_tuple(
+        dpp::slashcommand("parrot", "Repeat your messages.", pbot_->me.id)
+            .add_localization("zh-CN", "复读", "重复你的消息。")
+            .add_option(
+                dpp::command_option(dpp::co_user, "target", "User to be parroted", true)
+                    .add_localization("zh-CN", "目标用户", "要被复读的用户")
+            ).add_option(
+                dpp::command_option(dpp::co_integer, "duration", "Duration of parroting in seconds (default 30)", false)
+                    .add_localization("zh-CN", "持续时间", "复读持续时间，单位为秒 (默认 30)")
+                    .set_min_value(5)
+                    .set_max_value(120)
+            ).add_option(
+                dpp::command_option(dpp::co_string, "voice_preset", "Voice preset (default: little_girl)", false)
+                    .add_localization("zh-CN", "声音预设", "声音预设 (默认: little_girl)")
+                    .add_choice(dpp::command_option_choice("little_girl", "little_girl"))
+                    .add_choice(dpp::command_option_choice("baby", "baby"))
+                    .add_choice(dpp::command_option_choice("chipmunk", "chipmunk"))
+                    .add_choice(dpp::command_option_choice("deep_voice", "deep_voice"))
+                    .add_choice(dpp::command_option_choice("robot", "robot"))
+                    .add_choice(dpp::command_option_choice("none", "none"))
+            ),
+        new ParrotCommand(tool_)
+    );
     // cmds_["tts"] = std::make_tuple(
     //     dpp::slashcommand("tts", "Text to speech.", pbot_->me.id)
     //         .add_localization("zh-CN", "语音合成", "将文字转换为语音。"),

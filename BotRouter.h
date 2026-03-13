@@ -12,6 +12,7 @@
 #include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>
 
+// for those who will be in std standard
 namespace ex = stdexec;
 
 template <typename T>
@@ -40,7 +41,7 @@ private:
         std::optional<CommandBase*>>> cmds_;
     std::shared_ptr<ToolInterface> tool_;
 
-    exec::static_thread_pool pool_{4};
+    std::shared_ptr<exec::static_thread_pool> ppool_;
     std::stop_source stop_src_;
     int bg_task_cycle_ms_ = 60;
     int target_buffered_audio_ms_ = 15;

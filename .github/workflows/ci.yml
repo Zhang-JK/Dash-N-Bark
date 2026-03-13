@@ -8,6 +8,7 @@ on:
 
 jobs:
   build:
+    if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

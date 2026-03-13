@@ -3,14 +3,23 @@
 //
 
 #include "ToolInterface.h"
+
+#include <filesystem>
 #include <spdlog/spdlog.h>
 
-ToolInterface::ToolInterface(const std::string &base) : base_path_(base)
+#include <exec/repeat_until.hpp>
+#include <exec/start_detached.hpp>
+
+#include <utility>
+
+ToolInterface::ToolInterface(std::string base, std::shared_ptr<exec::static_thread_pool> pool)
+: base_path_(std::move(base)), ppool_(std::move(pool))
 {
     fetch_manager_ = std::make_shared<StreamFetch::FetchManager>(base_path_);
     audio_mixer_ = std::make_shared<AudioMixer::AudioMixer>();
     sound_pad_manager_ = std::make_shared<AudioMixer::SoundPadManager>();
     sound_pad_manager_->initialize(base_path_ + "/soundpad.db", base_path_ + "/sounds");
+    recorder_sessions_ = {};
 }
 
 ToolInterface::~ToolInterface()
@@ -26,6 +35,26 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playAudioClip(AudioMixer::Audio
         .success = true,
     };
 }
+
+ToolInterface::ToolInvokeResult<> ToolInterface::playAudioFromFile(std::string path,
+                                                                   AudioMixer::AudioMixer::SoundType type,
+                                                                   float volume)
+{
+    auto full_path = base_path_ + "/" + path;
+    if (!std::filesystem::exists(full_path)) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "File does not exist: " + full_path
+        };
+    }
+    AudioMixer::AudioClip clip(full_path, AudioMixer::AudioBuffer::PCM_16BIT_STEREO_48K, path);
+    audio_mixer_->registerAudio(clip, type, volume);
+    return {
+        .success = true,
+    };
+}
+
 
 ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url, int volume) {
     if (volume < 1 || volume > 200) {
@@ -168,3 +197,73 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
         .success = true
     };
 }
+
+ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset) {
+    std::lock_guard<std::mutex> lock(recorder_mutex_);
+    if (recorder_sessions_.find(user_id) != recorder_sessions_.end()) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "Recording session already exists for user_id"
+        };
+    }
+    // Reserve an entry (default constructed session pointer); actual session initialization can be done later
+    recorder_sessions_[user_id] = std::make_shared<AudioMixer::RecorderSession>(user_id, duration_seconds, true, base_path_);
+    auto session = recorder_sessions_[user_id];
+    session->setVoiceChangerPreset(voice_preset);
+    // todo: hackcode here
+    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds+1);
+    auto sched = ppool_->get_scheduler();
+    exec::timed_thread_scheduler timed_sched = timed_thread_context_.get_scheduler();
+    auto work = stdexec::schedule(sched) | stdexec::let_value(
+        [timed_sched, session, end_time, this] {
+            return exec::repeat_until(
+                exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
+                | stdexec::then([session, end_time, this] {
+                    // spdlog::debug("Stream left: {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(end_time - std::chrono::steady_clock::now()).count());
+                    auto local_clip = session->streamAudio();
+                    if (local_clip) {
+                        audio_mixer_->registerAudio(local_clip.value(), AudioMixer::AudioMixer::AUDIO_EFFECT, 0.8);
+                    }
+                    return std::chrono::steady_clock::now() >= end_time;
+                })
+            ) | stdexec::then([session, this] {
+                spdlog::info("Recording session ended, shutting down session for user_id: {}", session->getUserId());
+                {
+                    std::lock_guard<std::mutex> lock(recorder_mutex_);
+                    recorder_sessions_.erase(session->getUserId());
+                }
+                session->shutdown();
+            });
+        }
+    )
+    | stdexec::upon_error([](auto&&) noexcept {})
+    | stdexec::upon_stopped([]() noexcept {});
+    exec::start_detached(std::move(work));
+    return {
+        .success = true,
+    };
+}
+
+void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id) {
+    // First, grab a shared_ptr to the session under recorder_mutex_, then
+    // release the lock before calling any RecorderSession methods to avoid
+    // potential lock-order inversions.
+    std::shared_ptr<AudioMixer::RecorderSession> session;
+    {
+        std::lock_guard<std::mutex> lock(recorder_mutex_);
+        auto it = recorder_sessions_.find(user_id);
+        if (it == recorder_sessions_.end()) {
+            return;
+        }
+        session = it->second;
+    }
+
+    if (session->isShuttingDown()) {
+        spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
+    } else {
+        // spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
+        session->recordAudio(data.data(), size);
+    }
+}
+

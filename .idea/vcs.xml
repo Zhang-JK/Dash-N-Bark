@@ -6,6 +6,10 @@
     <mapping directory="$PROJECT_DIR$/cmake-build-release/_deps/zlib-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/DPP" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/DPP/doxygen-awesome-css" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/bungee" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/bungee/submodules/cxxopts" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/bungee/submodules/eigen" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/libs/bungee/submodules/pffft" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/cpr" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/json" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/libs/soci" vcs="Git" />

@@ -22,7 +22,9 @@ endif()
 
 add_library(audio_mixer
   ${AUDIO_MIXER_SOURCES}
-  ${AUDIO_MIXER_HEADERS} # headers can be listed for IDE visibility (optional)
+  ${AUDIO_MIXER_HEADERS}
+        src/RecorderSession.cpp
+        include/Audio-Mixer/RecorderSession.h # headers can be listed for IDE visibility (optional)
 )
 
 # Expose include directory to consumers
@@ -30,6 +32,7 @@ target_include_directories(audio_mixer
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
+    ${CMAKE_SOURCE_DIR}/libs/bungee
 )
 
 # Use modern C++ settings (inherit from parent, but ensure at least C++20)
@@ -37,7 +40,7 @@ target_compile_features(audio_mixer PUBLIC cxx_std_20)
 # propagate useful compile options if needed
 target_compile_options(audio_mixer PRIVATE $<$<CONFIG:Debug>:-g> -std=c++20)
 # Link dependencies
-target_link_libraries(audio_mixer spdlog SOCI::SOCI)
+target_link_libraries(audio_mixer spdlog SOCI::SOCI bungee_library)
 
 # Provide a namespaced alias so external CMake files can easily link to it
 add_library(AudioMixer::audio_mixer ALIAS audio_mixer)

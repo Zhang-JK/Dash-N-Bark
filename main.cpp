@@ -64,6 +64,12 @@ int main() {
         return 1;
     }
 
+    std::string join_sound_effect = GLOBAL_WORKING_DIR "system/se-rec.pcm";
+    if (!std::filesystem::exists(join_sound_effect)) {
+        spdlog::error("{} not found. Please ensure the sound effect exists.", join_sound_effect);
+        return 1;
+    }
+
     spdlog::info("Launching bot...");
     BotRouter botRouter(token, GLOBAL_WORKING_DIR);
     botRouter.startBgTask();

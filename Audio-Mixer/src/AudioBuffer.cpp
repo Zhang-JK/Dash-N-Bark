@@ -11,13 +11,13 @@
 namespace AudioMixer {
 
     AudioBuffer::AudioBuffer(const std::string& file_path, AudioFormat format)
-        : data(nullptr), size(0), format(format) {
+        : data_(nullptr), size_(0), format_(format) {
         std::ifstream input(file_path, std::ios::in | std::ios::binary | std::ios::ate);
         if (input.is_open()) {
-            size = input.tellg();
-            data = new uint8_t[size];
+            size_ = input.tellg();
+            data_ = new uint8_t[size_];
             input.seekg(0, std::ios::beg);
-            input.read((char *) data, size);
+            input.read((char *) data_, size_);
             input.close();
         } else {
             throw std::runtime_error("Failed to open `" + file_path + "`");
@@ -27,35 +27,40 @@ namespace AudioMixer {
         }
     }
 
+    AudioBuffer::AudioBuffer(const uint8_t* data, size_t size)
+        : data_(new uint8_t[size]), size_(size), format_(PCM_16BIT_STEREO_48K) {
+        memcpy(this->data_, data, size);
+    }
+
     AudioBuffer::AudioBuffer(size_t size)
-        : data(new uint8_t[size]), size(size), format(PCM_16BIT_STEREO_48K) {
-        memset(data, 0, size);
+        : data_(new uint8_t[size]), size_(size), format_(PCM_16BIT_STEREO_48K) {
+        memset(data_, 0, size);
     }
 
     AudioBuffer::~AudioBuffer() {
-        delete[] data;
+        delete[] data_;
     }
 
     bool AudioBuffer::isValid() const {
-        return data != nullptr && size > 0;
+        return data_ != nullptr && size_ > 0;
     }
 
     uint8_t* AudioBuffer::getData() {
-        return data;
+        return data_;
     }
 
     size_t AudioBuffer::getSize() const {
-        return size;
+        return size_;
     }
 
     uint8_t *AudioBuffer::getDataWritable() const {
-        return data;
+        return data_;
     }
 
     bool AudioBuffer::checkFormatValidation() const {
-        switch (format) {
+        switch (format_) {
             case PCM_16BIT_STEREO_48K:
-                return (size % 4) == 0; // 16-bit stereo means each sample is 4 bytes
+                return (size_ % 4) == 0; // 16-bit stereo means each sample is 4 bytes
             default:
                 return false;
         }
