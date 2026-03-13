@@ -32,6 +32,7 @@ target_include_directories(audio_mixer
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
+    ${CMAKE_SOURCE_DIR}/libs/bungee
 )
 
 # Use modern C++ settings (inherit from parent, but ensure at least C++20)
