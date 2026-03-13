@@ -166,14 +166,14 @@ public:
             return;
         }
         if (ids[1] == "Preview") {
-            if (!joinVoiceChannel(event)) {
+            if (!joinVoiceChannel(event, true)) {
                 return;
             }
             tool_interface_->playAudioClip(processing_clip_.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
             dpp::message msg(event.command.channel_id,
                     "Previewing the audio clip " + params_.value().name);
             msg.add_component(assembleButton());
-            event.reply(dpp::ir_update_message, msg);
+            event.edit_original_response(msg);
         } else if (ids[1] == "Confirm") {
             auto add_res = tool_interface_->addToSoundpad(processing_clip_.value(),
                                                                                     params_.value().name,

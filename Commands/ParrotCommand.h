@@ -58,7 +58,7 @@ public:
 
         auto rec_result = tool_interface_->initRecordingService(target_user.str(), parroting_duration, voice_preset);
         if (!rec_result.success) {
-            event.reply("Failed to start recording: " + rec_result.message);
+            event.edit_original_response(dpp::message("Failed to start recording: " + rec_result.message));
             return;
         }
         tool_interface_->playAudioFromFile("system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
@@ -68,8 +68,8 @@ public:
             ? target_user_obj->format_username()
             : ("<@" + target_user.str() + ">");
 
-        event.reply("Parroting " + target_display_name + " with " 
-                    + voice_preset_str + " voice for " + std::to_string(parroting_duration) + " seconds!");
+        event.edit_original_response(dpp::message("Parroting " + target_display_name + " with " 
+                    + voice_preset_str + " voice for " + std::to_string(parroting_duration) + " seconds!"));
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {

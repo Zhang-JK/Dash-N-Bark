@@ -151,12 +151,16 @@ private:
         return rows;
     }
 
-    void reply_with_button_msg(const dpp::button_click_t &event, const std::string &content, bool is_tag = false) const {
+    void reply_with_button_msg(const dpp::button_click_t &event, const std::string &content, bool is_tag = false, bool edit = false) const {
         dpp::message msg(event.command.channel_id, content);
         for (auto &comp : build_soundpad_component(is_tag)) {
             msg.add_component(comp);
         }
-        event.reply(dpp::ir_update_message, msg);
+        if (edit) {
+            event.edit_original_response(msg);
+        } else {
+            event.reply(dpp::ir_update_message, msg);
+        }
     }
 
     void update_button_page(const dpp::button_click_t &event, bool is_tag = false) {
@@ -261,16 +265,16 @@ public:
             soundpad_pagination_->current_page = std::min(soundpad_pagination_->total_pages - 1, soundpad_pagination_->current_page + 1);
             update_button_page(event, soundpad_pagination_->by_tag);
         } else if (cmd == "play") {
-            if (!joinVoiceChannel(event)) {
+            if (!joinVoiceChannel(event, true)) {
                 return;
             }
             int clip_id = std::stoi(cmd_param);
             auto res = tool_interface_->playSoundpadClip(clip_id, soundpad_volume_);
             if (!res.success) {
-                event.reply(dpp::ir_update_message, "Failed to play clip ID: " + std::to_string(clip_id));
+                event.edit_original_response(dpp::message("Failed to play clip ID: " + std::to_string(clip_id)));
                 return;
             }
-            reply_with_button_msg(event, "Play clip: " + soundpad_mappings_->at(clip_id), soundpad_pagination_->by_tag);
+            reply_with_button_msg(event, "Play clip: " + soundpad_mappings_->at(clip_id), soundpad_pagination_->by_tag, true);
         } else if (cmd == "tag") {
             soundpad_pagination_->current_page = 0;
             soundpad_pagination_->tag = cmd_param;

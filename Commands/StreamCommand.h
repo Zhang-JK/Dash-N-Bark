@@ -32,7 +32,7 @@ public:
             return;
         }
 
-        event.reply(dpp::ir_deferred_channel_message_with_source, "Fetching sound from URL...");
+        event.edit_original_response(dpp::message("Fetching sound from URL..."));
         auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, volume);
         if (!tool_res.success || !tool_res.data.has_value()) {
             event.edit_original_response(dpp::message("Failed to fetch with error code " +
