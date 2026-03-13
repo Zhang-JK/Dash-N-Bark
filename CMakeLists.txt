@@ -25,6 +25,18 @@ add_subdirectory(libs/spdlog)
 add_subdirectory(libs/soci)
 add_subdirectory(libs/cpr)
 add_subdirectory(libs/json)
+# Bungee uses ${CMAKE_INSTALL_PREFIX} literally in its install() destinations, so the
+# path is expanded at configure time rather than at install time. Override the default
+# (/usr/local) to the local build directory so bungee never tries to write to a system
+# path. The guard ensures a user-supplied -DCMAKE_INSTALL_PREFIX is still respected.
+# All other libraries use relative DESTINATION paths, so cmake --install --prefix
+# overrides their location at install time regardless of this configure-time value.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE PATH "Install path prefix" FORCE)
+endif()
+# BUNGEE_PRESET is appended to CMAKE_INSTALL_PREFIX in bungee's install() calls;
+# setting it to "bin" routes bungee's library and executable to build/bin.
+set(BUNGEE_PRESET "bin" CACHE STRING "Bungee install location suffix (relative to CMAKE_INSTALL_PREFIX)" FORCE)
 add_subdirectory(libs/bungee)
 if (NOT DEFINED OPUS_INCLUDE_DIRS OR OPUS_INCLUDE_DIRS STREQUAL "" OR OPUS_INCLUDE_DIRS MATCHES "-NOTFOUND")
     message(FATAL_ERROR "OPUS is needed for voice features: add the opus submodule or call\
@@ -67,6 +79,6 @@ if(NOT EXISTS ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux)
 endif()
 file(CHMOD ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
-install(TARGETS ${PROJECT_NAME} dpp stdexec audio_mixer spdlog stream_fetch nlohmann_json
+install(TARGETS ${PROJECT_NAME} dpp stdexec audio_mixer spdlog stream_fetch nlohmann_json bungee_library
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib)
