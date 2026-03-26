@@ -265,7 +265,7 @@ void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t siz
         spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
     } else {
         spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
-        if (session->isTimeOut()) {
+        if (session->isTimeout()) {
             spdlog::warn("Recording session timed out, force shutting down session for user_id: {}", user_id);
             {
                 std::lock_guard<std::mutex> lock(recorder_mutex_);

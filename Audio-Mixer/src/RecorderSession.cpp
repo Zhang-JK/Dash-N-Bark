@@ -144,9 +144,9 @@ namespace AudioMixer {
     // this is a hack function
     // sometimes the stream coroutine does not run
     // have to use this for checking if timeout happens
-    bool RecorderSession::isTimeOut() {
+    bool RecorderSession::isTimeout() {
         if (is_shutting_down_) {
-            return true;
+            return false;
         }
         std::lock_guard lock(mutex_);
         return
