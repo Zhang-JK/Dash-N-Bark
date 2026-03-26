@@ -29,30 +29,49 @@ public:
         : CommandBase(std::move(tool_interface)) {}
 
     // helper function
-    static auto parseTime(const std::string &s) -> int {
-        if (s.empty()) return -1;
+    static auto parseTime(const std::string &s) -> double {
+        if (s.empty()) return -1.0;
         size_t pos = s.find(':');
         try {
             if (pos == std::string::npos) {
-                for (char c : s) if (!std::isdigit(static_cast<unsigned char>(c))) return -1;
-                return std::stoi(s);
+                // Allow digits and at most one decimal point
+                bool has_dot = false;
+                for (char c : s) {
+                    if (c == '.') {
+                        if (has_dot) return -1.0;
+                        has_dot = true;
+                    } else if (!std::isdigit(static_cast<unsigned char>(c))) {
+                        return -1.0;
+                    }
+                }
+                return std::stod(s);
             } else {
                 std::string a = s.substr(0, pos);
                 std::string b = s.substr(pos + 1);
-                if (a.empty() || b.empty()) return -1;
-                for (char c : a) if (!std::isdigit(static_cast<unsigned char>(c))) return -1;
-                for (char c : b) if (!std::isdigit(static_cast<unsigned char>(c))) return -1;
+                if (a.empty() || b.empty()) return -1.0;
+                // Minutes part: digits only
+                for (char c : a) if (!std::isdigit(static_cast<unsigned char>(c))) return -1.0;
+                // Seconds part: digits with optional single decimal point
+                bool has_dot = false;
+                for (char c : b) {
+                    if (c == '.') {
+                        if (has_dot) return -1.0;
+                        has_dot = true;
+                    } else if (!std::isdigit(static_cast<unsigned char>(c))) {
+                        return -1.0;
+                    }
+                }
                 int A = std::stoi(a);
-                int B = std::stoi(b);
-                if (B < 0 || B >= 60) return -1; // seconds part must be 0..59
-                return A * 60 + B;
+                double B = std::stod(b);
+                if (B < 0.0 || B >= 60.0) return -1.0; // seconds part must be 0..59
+                return A * 60.0 + B;
             }
         } catch (...) {
-            return -1;
+            return -1.0;
         }
     }
 
-    static auto timeToBufferIndex(int time_sec, int sample_rate) -> size_t {
+    static auto timeToBufferIndex(double time_sec, int sample_rate) -> size_t {
         return static_cast<size_t>(time_sec * sample_rate);
     }
 
@@ -104,10 +123,10 @@ public:
             event.reply("URL and name are required parameters.");
             return;
         }
-        int start_sec = parseTime(start);
-        int end_sec = parseTime(end);
-        if (start_sec < 0 || end_sec < 0) {
-            event.reply("`start` and `end` must be either `{int}` or `{int}:{int}` (mm:ss).");
+        double start_sec = parseTime(start);
+        double end_sec = parseTime(end);
+        if (start_sec < 0.0 || end_sec < 0.0) {
+            event.reply("`start` and `end` must be in `{seconds}` or `{mm}:{ss}` format (e.g. `13.67` or `1:4.25`).");
             return;
         }
         if (end_sec <= start_sec) {
@@ -140,11 +159,13 @@ public:
         params_ = AddParams{name, user_id, tag1, tag2, pin};
 
         // Create a message
+        char dur_buf[32];
+        std::snprintf(dur_buf, sizeof(dur_buf), "%.3g", end_sec - start_sec);
         dpp::message msg(event.command.channel_id, "You are adding a new sound clip:\n"
                                                  "Name: " + name + "\n"
                                                  "Tags: " + tag1 + " " + tag2 + "\n"
                                                  "Pinned: " + (pin ? "Yes" : "No") + "\n"
-                                                 "Duration: " + std::to_string(end_sec - start_sec) + " seconds");
+                                                 "Duration: " + std::string(dur_buf) + " seconds");
 
         auto ts = std::to_string(static_cast<long long>(std::time(nullptr)));
         msg.add_component(assembleButton());
