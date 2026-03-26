@@ -23,7 +23,7 @@ namespace AudioMixer {
 
         void recordAudio(const uint8_t* audio_data, size_t data_size);
         std::optional<AudioClip> streamAudio(int len_ms = 60);
-        bool isDone();
+        bool isTimeout();
         std::string getUserId() const;
         bool checkUserId(const std::string& user_id);
         void shutdown();
