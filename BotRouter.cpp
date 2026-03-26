@@ -55,6 +55,7 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     pbot_->on_ready(this->getRegisterCmdFunction());
     pbot_->on_slashcommand(this->getCmdRouterFunction<dpp::slashcommand_t>());
     pbot_->on_button_click(this->getCmdRouterFunction<dpp::button_click_t>());
+    pbot_->on_form_submit(this->getCmdRouterFunction<dpp::form_submit_t>());
 }
 
 BotRouter::~BotRouter() {
@@ -378,6 +379,16 @@ std::string BotRouter::getCommandName(const dpp::button_click_t& event) {
     return id.substr(0, pos);
 }
 
+template<>
+std::string BotRouter::getCommandName(const dpp::form_submit_t& event) {
+    const std::string id = event.custom_id;
+    const auto pos = id.find("::");
+    if (pos == std::string::npos) {
+        return id;
+    }
+    return id.substr(0, pos);
+}
+
 template<SlashAndButtonCmd CmdType>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const CmdType& event, std::shared_ptr<dpp::cluster> bot) {
     throw std::runtime_error("Not implemented handlerExecWrapper");
@@ -391,4 +402,9 @@ void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::slashcommand
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::button_click_t& event, std::shared_ptr<dpp::cluster> bot) {
     handler->button(event, bot);
+}
+
+template<>
+void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::form_submit_t& event, std::shared_ptr<dpp::cluster> bot) {
+    handler->form_submit(event, bot);
 }
