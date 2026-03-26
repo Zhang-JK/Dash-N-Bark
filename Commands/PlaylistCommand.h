@@ -21,7 +21,7 @@ public:
             return;
         }
 
-        auto playlist = tool_interface_->getPlaylist().data;
+        auto playlist = tool_interface_->getPlaylist(event.command.guild_id.str()).data;
         if (!playlist.has_value()) {
             event.reply("The playlist is currently empty.");
             return;

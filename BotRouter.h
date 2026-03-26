@@ -44,7 +44,6 @@ private:
     std::shared_ptr<exec::static_thread_pool> ppool_;
     std::stop_source stop_src_;
     int bg_task_cycle_ms_ = 60;
-    int target_buffered_audio_ms_ = 15;
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H

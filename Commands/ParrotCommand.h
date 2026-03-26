@@ -56,12 +56,12 @@ public:
             return;
         }
 
-        auto rec_result = tool_interface_->initRecordingService(target_user.str(), parroting_duration, voice_preset);
+        auto rec_result = tool_interface_->initRecordingService(event.command.guild_id.str(), target_user.str(), parroting_duration, voice_preset);
         if (!rec_result.success) {
             event.edit_original_response(dpp::message("Failed to start recording: " + rec_result.message));
             return;
         }
-        tool_interface_->playAudioFromFile("system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
+        tool_interface_->playAudioFromFile(event.command.guild_id.str(), "system/se-rec.pcm", AudioMixer::AudioMixer::AUDIO_EFFECT, 0.2f);
 
         dpp::user* target_user_obj = dpp::find_user(target_user);
         std::string target_display_name = target_user_obj
