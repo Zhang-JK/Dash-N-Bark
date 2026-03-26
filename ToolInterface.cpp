@@ -237,8 +237,22 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
             });
         }
     )
-    | stdexec::upon_error([](auto&&) noexcept {})
-    | stdexec::upon_stopped([]() noexcept {});
+    | stdexec::upon_error([session, this](auto&&) noexcept {
+        spdlog::info("Recording session ended, shutting down session for user_id: {}", session->getUserId());
+        {
+            std::lock_guard<std::mutex> lock(recorder_mutex_);
+            recorder_sessions_.erase(session->getUserId());
+        }
+        session->shutdown();
+    })
+    | stdexec::upon_stopped([session, this]() noexcept {
+        spdlog::info("Recording session ended, shutting down session for user_id: {}", session->getUserId());
+        {
+            std::lock_guard<std::mutex> lock(recorder_mutex_);
+            recorder_sessions_.erase(session->getUserId());
+        }
+        session->shutdown();
+    });
     exec::start_detached(std::move(work));
     return {
         .success = true,
