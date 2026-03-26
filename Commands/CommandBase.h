@@ -41,16 +41,24 @@ protected:
         return parts;
     }
 
-    static bool joinVoiceChannel(const dpp::interaction_create_t &event) {
+    static bool joinVoiceChannel(const dpp::interaction_create_t &event, bool is_button = false) {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             spdlog::error("Guild not found for guild ID: {}", event.command.guild_id);
             return false;
         }
+
+        // Send deferred response to prevent Discord interaction timeout
+        if (is_button) {
+            event.reply(dpp::ir_deferred_update_message, "");
+        } else {
+            event.thinking();
+        }
+
         dpp::voiceconn* vc_bot = event.from()->get_voice(event.command.guild_id);
         if (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready()) {
             if (!g->connect_member_voice(*event.owner, event.command.get_issuing_user().id)) {
-                event.reply("You don't seem to be in a voice channel!");
+                event.edit_original_response(dpp::message("You don't seem to be in a voice channel!"));
                 return false;
             }
             // wait for ready
@@ -59,7 +67,7 @@ protected:
             do {
                 vc_bot = event.from()->get_voice(event.command.guild_id);
                 if (std::chrono::steady_clock::now() - start > timeout) {
-                    event.reply("Timeout waiting for voice client to become ready.");
+                    event.edit_original_response(dpp::message("Timeout waiting for voice client to become ready."));
                     return false;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));

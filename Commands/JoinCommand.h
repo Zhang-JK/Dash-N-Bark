@@ -24,7 +24,7 @@ public:
         if (!joinVoiceChannel(event)) {
             return;
         }
-        event.reply("Joined your voice channel!");
+        event.edit_original_response(dpp::message("Joined your voice channel!"));
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {

@@ -27,7 +27,7 @@ int main() {
         spdlog::set_level(spdlog::level::trace);
         spdlog::set_pattern("[%H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
     #else
-        spdlog::set_level(spdlog::level::info);
+        spdlog::set_level(spdlog::level::debug);
     #endif
 
     // read token from config.json file
