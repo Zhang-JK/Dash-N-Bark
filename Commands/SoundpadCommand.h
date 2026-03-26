@@ -269,7 +269,7 @@ public:
                 return;
             }
             int clip_id = std::stoi(cmd_param);
-            auto res = tool_interface_->playSoundpadClip(clip_id, soundpad_volume_);
+            auto res = tool_interface_->playSoundpadClip(event.command.guild_id.str(), clip_id, soundpad_volume_);
             if (!res.success) {
                 event.edit_original_response(dpp::message("Failed to play clip ID: " + std::to_string(clip_id)));
                 return;

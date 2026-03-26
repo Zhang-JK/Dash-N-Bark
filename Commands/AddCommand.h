@@ -169,7 +169,7 @@ public:
             if (!joinVoiceChannel(event, true)) {
                 return;
             }
-            tool_interface_->playAudioClip(processing_clip_.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
+            tool_interface_->playAudioClip(event.command.guild_id.str(), processing_clip_.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
             dpp::message msg(event.command.channel_id,
                     "Previewing the audio clip " + params_.value().name);
             msg.add_component(assembleButton());

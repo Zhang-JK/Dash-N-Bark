@@ -81,7 +81,8 @@ BotRouter::~BotRouter() {
 void BotRouter::startBgTask() {
     using namespace std::chrono;
     pbot_->on_voice_receive([tool = tool_](const dpp::voice_receive_t &event) {
-        tool->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
+        tool->recordingVoiceCallback(event.audio_data, event.audio_size,
+            event.voice_client->server_id.str(), event.user_id.str());
     });
 
     #ifdef NDEBUG
@@ -90,87 +91,80 @@ void BotRouter::startBgTask() {
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 60;
     #endif
 
+    struct GuildAudioState {
+        dpp::discord_client* client = nullptr;
+        int idle_count = 0;
+        bool init = true;
+    };
+
     auto bg_ticker = stdexec::schedule(ppool_->get_scheduler())
         | stdexec::let_value([this, token = stop_src_.get_token()]() mutable {
             // Return a sender that performs the loop
             return stdexec::just() | stdexec::then([this, token]() {
-                dpp::discord_client* client = nullptr;
-                std::mutex client_mutex;
-                // todo: support multi instances
-                std::optional<dpp::snowflake> serving_guild_id = std::nullopt;
-                pbot_->on_voice_ready([&client, &serving_guild_id, &client_mutex](const dpp::voice_ready_t& event) {
-                    std::lock_guard<std::mutex> lg(client_mutex);
-                    spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
-                    client = event.from();
-                    serving_guild_id = event.voice_client->server_id;
+                std::map<dpp::snowflake, GuildAudioState> guild_states;
+                std::mutex guild_states_mutex;
+
+                pbot_->on_voice_ready([&guild_states, &guild_states_mutex](const dpp::voice_ready_t& event) {
+                    std::lock_guard<std::mutex> lg(guild_states_mutex);
+                    spdlog::debug("on_voice_ready triggered for guild {}", event.voice_client->server_id);
+                    auto& state = guild_states[event.voice_client->server_id];
+                    state.client = event.from();
+                    state.idle_count = 0;
+                    state.init = true;
                 });
 
                 // cycle_ms * sample_rate * bytes_per_sample * channels
                 const auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000;
-                auto audio_buffered_timestamp = steady_clock::now();
-                auto sleep_duration = microseconds(bg_task_cycle_ms_*1000);
-                bool init = true;
-
                 auto max_idle_count = VOICE_IDLE_TIMEOUT_SEC * 1000 / bg_task_cycle_ms_;
-                int idle_count = 0;
 
                 while (!token.stop_requested()) {
                     if (token.stop_requested()) break;
                     try {
-                        std::lock_guard<std::mutex> lg(client_mutex);
-                        if (client && serving_guild_id) {
-                            auto local_voice_conn = client->get_voice(serving_guild_id.value());
-                            auto audio = tool_->stepAudioMixer(step_size);
+                        std::lock_guard<std::mutex> lg(guild_states_mutex);
+                        std::vector<dpp::snowflake> guilds_to_remove;
+
+                        for (auto& [guild_id, state] : guild_states) {
+                            if (!state.client) continue;
+                            auto local_voice_conn = state.client->get_voice(guild_id);
+                            auto audio = tool_->stepAudioMixer(guild_id.str(), step_size);
                             if (local_voice_conn && audio) {
-                                idle_count = 0;
+                                state.idle_count = 0;
                                 if (local_voice_conn->voiceclient && local_voice_conn->voiceclient->is_ready()) {
-                                    local_voice_conn->voiceclient->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
-                                    if (init) {
-                                        audio_buffered_timestamp = steady_clock::now() + microseconds(bg_task_cycle_ms_ * 1000);
-                                        init = false;
-                                    } else {
-                                        audio_buffered_timestamp += microseconds(bg_task_cycle_ms_ * 1000);
-                                    }
-                                    sleep_duration = duration_cast<microseconds>(audio_buffered_timestamp -
-                                        microseconds(target_buffered_audio_ms_ * 1000) - steady_clock::now());
-                                    if (sleep_duration < microseconds(0)) {
-                                        sleep_duration = microseconds(0);
-                                    }
-                                } else {
-                                    sleep_duration = microseconds(bg_task_cycle_ms_*1000);
+                                    local_voice_conn->voiceclient->send_audio_raw(
+                                        reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
+                                    state.init = false;
                                 }
                             } else {
-                                if (!init) {
-                                    idle_count = 0;
-                                    init = true;
+                                if (!state.init) {
+                                    state.idle_count = 0;
+                                    state.init = true;
                                     if (!local_voice_conn) {
-                                        spdlog::info("client disconnected voice");
-                                        tool_->clearAllAudio();
+                                        spdlog::info("client disconnected voice for guild {}", guild_id);
+                                        tool_->clearAllAudio(guild_id.str());
+                                        guilds_to_remove.push_back(guild_id);
                                     }
                                 }
                                 if (local_voice_conn) {
-                                    idle_count++;
-                                    if (idle_count >= max_idle_count) {
-                                        spdlog::info("Voice connection idle for too long, disconnecting...");
-                                        client->disconnect_voice(serving_guild_id.value());
-                                        idle_count = 0;
-                                        tool_->clearAllAudio();
-                                        init = true;
+                                    state.idle_count++;
+                                    if (state.idle_count >= max_idle_count) {
+                                        spdlog::info("Voice connection idle for too long for guild {}, disconnecting...", guild_id);
+                                        state.client->disconnect_voice(guild_id);
+                                        state.idle_count = 0;
+                                        tool_->clearAllAudio(guild_id.str());
+                                        guilds_to_remove.push_back(guild_id);
                                     }
                                 }
-                                sleep_duration = microseconds(bg_task_cycle_ms_*1000);
                             }
                         }
-                    } catch (const dpp::voice_exception& e) {
+
+                        for (const auto& id : guilds_to_remove) {
+                            guild_states.erase(id);
+                        }                    } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
-                        client = nullptr;
-                        serving_guild_id = std::nullopt;
                     } catch (...) {
                         spdlog::error("Unknown exception in bg task.");
-                        client = nullptr;
-                        serving_guild_id = std::nullopt;
                     }
-                    std::this_thread::sleep_for(sleep_duration);
+                    std::this_thread::sleep_for(microseconds(bg_task_cycle_ms_*1000));
                 }
                 spdlog::debug("[Ticker] Cleaning up and stopping.");
             });

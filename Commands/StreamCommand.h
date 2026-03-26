@@ -33,7 +33,7 @@ public:
         }
 
         event.edit_original_response(dpp::message("Fetching sound from URL..."));
-        auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, volume);
+        auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(event.command.guild_id.str(), url, volume);
         if (!tool_res.success || !tool_res.data.has_value()) {
             event.edit_original_response(dpp::message("Failed to fetch with error code " +
                         std::to_string(tool_res.error_code) + ": " + tool_res.message));

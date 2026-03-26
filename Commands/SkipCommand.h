@@ -21,18 +21,18 @@ public:
             return;
         }
 
-        auto current_song = tool_interface_->getCurrentSong();
+        auto current_song = tool_interface_->getCurrentSong(event.command.guild_id.str());
         if (!current_song.success) {
             event.reply("No song is currently playing!");
             return;
         }
 
-        if (!tool_interface_->skipCurrentSong().success) {
+        if (!tool_interface_->skipCurrentSong(event.command.guild_id.str()).success) {
             event.reply("Play list is empty");
             return;
         }
 
-        auto next_song = tool_interface_->getCurrentSong();
+        auto next_song = tool_interface_->getCurrentSong(event.command.guild_id.str());
         if (!next_song.success) {
             event.reply("**Skipped** " + std::get<0>(*current_song.data) + "\n**No more songs in the queue.**");
         } else {
