@@ -141,19 +141,25 @@ namespace AudioMixer {
         return AudioClip(combined_buffer, 0, bytes_written);
     }
 
-    bool RecorderSession::isDone() {
+    // this is a hack function
+    // sometimes the stream coroutine does not run
+    // have to use this for checking if timeout happens
+    bool RecorderSession::isTimeOut() {
         if (is_shutting_down_) {
             return true;
         }
         std::lock_guard lock(mutex_);
         return
             std::chrono::duration_cast<std::chrono::milliseconds>
-                (std::chrono::steady_clock::now() - start_time_).count() >= target_duration_ms_
-            && audio_queue_.empty();
+                (std::chrono::steady_clock::now() - start_time_).count()
+                >= target_duration_ms_ + 5000;      // timeout is set to 5000ms
     }
 
     void RecorderSession::shutdown() {
         std::lock_guard lock(mutex_);
+        if (is_shutting_down_) {
+            return;
+        }
         is_shutting_down_ = true;
         while (!audio_queue_.empty()) {
             audio_queue_.pop();

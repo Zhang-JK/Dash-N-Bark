@@ -199,20 +199,22 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
 }
 
 ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset) {
-    std::lock_guard<std::mutex> lock(recorder_mutex_);
-    if (recorder_sessions_.find(user_id) != recorder_sessions_.end()) {
-        return {
-            .success = false,
-            .error_code = -1,
-            .message = "Recording session already exists for user_id"
-        };
-    }
-    // Reserve an entry (default constructed session pointer); actual session initialization can be done later
-    recorder_sessions_[user_id] = std::make_shared<AudioMixer::RecorderSession>(user_id, duration_seconds, true, base_path_);
-    auto session = recorder_sessions_[user_id];
-    session->setVoiceChangerPreset(voice_preset);
-    // todo: hackcode here
-    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds+1);
+    std::shared_ptr<AudioMixer::RecorderSession> session = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(recorder_mutex_);
+        if (recorder_sessions_.find(user_id) != recorder_sessions_.end()) {
+            return {
+                .success = false,
+                .error_code = -1,
+                .message = "Recording session already exists for user_id"
+            };
+        }
+        // Reserve an entry (default constructed session pointer); actual session initialization can be done later
+        recorder_sessions_[user_id] = std::make_shared<AudioMixer::RecorderSession>(user_id, duration_seconds, true, base_path_);
+        session = recorder_sessions_[user_id];
+        session->setVoiceChangerPreset(voice_preset);
+    } // release lock here
+    auto end_time = std::chrono::steady_clock::now() + std::chrono::seconds(duration_seconds+1);    // delay stream for 1s
     auto sched = ppool_->get_scheduler();
     exec::timed_thread_scheduler timed_sched = timed_thread_context_.get_scheduler();
     auto work = stdexec::schedule(sched) | stdexec::let_value(
@@ -220,7 +222,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
             return exec::repeat_until(
                 exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
                 | stdexec::then([session, end_time, this] {
-                    // spdlog::debug("Stream left: {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(end_time - std::chrono::steady_clock::now()).count());
+                    spdlog::debug("Stream left: {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(end_time - std::chrono::steady_clock::now()).count());
                     auto local_clip = session->streamAudio();
                     if (local_clip) {
                         audio_mixer_->registerAudio(local_clip.value(), AudioMixer::AudioMixer::AUDIO_EFFECT, 0.8);
@@ -262,7 +264,16 @@ void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t siz
     if (session->isShuttingDown()) {
         spdlog::info("Recording session ended, stop receiving audio data for user_id: {}", user_id);
     } else {
-        // spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
+        spdlog::debug("Recording session received audio data for user_id: {}, size: {}", user_id, size);
+        if (session->isTimeOut()) {
+            spdlog::warn("Recording session timed out, force shutting down session for user_id: {}", user_id);
+            {
+                std::lock_guard<std::mutex> lock(recorder_mutex_);
+                recorder_sessions_.erase(user_id);
+            }
+            session->shutdown();
+            return;
+        }
         session->recordAudio(data.data(), size);
     }
 }
