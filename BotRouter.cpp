@@ -235,12 +235,12 @@ void BotRouter::setCmds() {
                     .add_localization("zh-CN", "链接", "要剪辑的视频链接")
             )
             .add_option(
-                dpp::command_option(dpp::co_string, "start", "Clip start time (x:xx or xxx seconds)", true)
-                    .add_localization("zh-CN", "起始时间", "片段起始时间 (x:xx 或 xxx 秒)")
+                dpp::command_option(dpp::co_string, "start", "Clip start time (e.g. 13.67 or 1:4.25)", true)
+                    .add_localization("zh-CN", "起始时间", "片段起始时间 (如 13.67 或 1:4.25)")
             )
             .add_option(
-                dpp::command_option(dpp::co_string, "end", "Clip end time (x:xx or xxx seconds)", true)
-                    .add_localization("zh-CN", "结束时间", "片段结束时间 (x:xx 或 xxx 秒)")
+                dpp::command_option(dpp::co_string, "end", "Clip end time (e.g. 13.67 or 1:4.25)", true)
+                    .add_localization("zh-CN", "结束时间", "片段结束时间 (如 13.67 或 1:4.25)")
             )
             .add_option(
                 dpp::command_option(dpp::co_string, "name", "Name your clip", true)
