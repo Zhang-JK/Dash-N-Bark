@@ -17,16 +17,24 @@ private:
         bool by_tag;
     };
 
+    // Per-invocation state for a single /soundpad session.
+    // Keyed by a random UID embedded in every button/modal custom_id so that
+    // concurrent sessions (multiple users, multiple /soundpad messages) are
+    // completely independent and cannot interfere with each other.
     struct SoundpadSession {
-        std::map<int, std::string> mappings;
-        PagedComponent pagination;
-        int volume = 100;
-        std::time_t created_at = 0;
+        std::map<int, std::string> mappings;  // current page: clip_id -> clip_name
+        PagedComponent pagination;             // pagination state for the current view
+        int volume = 100;                      // current playback volume (10-100)
+        std::time_t created_at = 0;           // unix timestamp used for TTL expiry
+        std::string invoker_name;              // display name of the user who ran /soundpad
+        std::string last_action;              // human-readable description of the most recent interaction
     };
 
-    static constexpr int MAX_SESSIONS = 10;
-    static constexpr int SESSION_EXPIRE_SECS = 180;
-    static constexpr int SESSION_CLEANUP_SECS = SESSION_EXPIRE_SECS * 2;
+    static constexpr int MAX_SESSIONS = 10;          // hard cap on concurrent sessions
+    static constexpr int SESSION_EXPIRE_SECS = 180;  // buttons expire after 3 min (Discord's default TTL)
+    static constexpr int SESSION_CLEANUP_SECS = SESSION_EXPIRE_SECS * 2;  // GC threshold (6 min)
+    // Component ID for the page-number text input inside the Jump modal.
+    // Discord modals only support text inputs, so the value is validated server-side.
     static constexpr const char* JUMP_PAGE_COMPONENT_ID = "page_number";
 
     std::map<std::string, SoundpadSession> sessions_;
@@ -47,7 +55,23 @@ private:
         return s;
     }
 
-    // Must be called with sessions_mutex_ held
+    // Build the header line shown in every soundpad message so the channel can
+    // always see who owns the session and what the most recent interaction was.
+    // Format: "Soundpad (by <invoker>)\nLast: <action>"
+    [[nodiscard]] static std::string build_status_line(const SoundpadSession& session) {
+        std::string line = "Soundpad";
+        if (!session.invoker_name.empty()) {
+            line += " (by " + session.invoker_name + ")";
+        }
+        if (!session.last_action.empty()) {
+            line += "\nLast: " + session.last_action;
+        }
+        return line;
+    }
+
+    // Remove sessions older than SESSION_CLEANUP_SECS, then evict the oldest
+    // entry if the hard cap MAX_SESSIONS is still exceeded.
+    // Must be called with sessions_mutex_ held.
     void evict_old_sessions() {
         auto now = std::time(nullptr);
         for (auto it = sessions_.begin(); it != sessions_.end(); ) {
@@ -197,6 +221,7 @@ private:
     }
 
     // Fetches the current page data and updates the session, then sends the reply.
+    // session.last_action should be updated before calling this.
     // Must be called with sessions_mutex_ held.
     void update_button_page(const dpp::button_click_t &event,
                             SoundpadSession& session, const std::string& uid) {
@@ -219,8 +244,7 @@ private:
         }
         session.mappings = res.data.value();
         auto msg = build_soundpad_message(event.command.channel_id, session, uid,
-            is_tag ? "Select your tag:" : "Page " + std::to_string(session.pagination.current_page + 1),
-            is_tag);
+            build_status_line(session), is_tag);
         event.reply(dpp::ir_update_message, msg);
     }
 
@@ -247,8 +271,7 @@ private:
         }
         session.mappings = res.data.value();
         auto msg = build_soundpad_message(event.command.channel_id, session, uid,
-            is_tag ? "Select your tag:" : "Page " + std::to_string(session.pagination.current_page + 1),
-            is_tag);
+            build_status_line(session), is_tag);
         event.edit_original_response(msg);
     }
 
