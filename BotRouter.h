@@ -16,7 +16,7 @@
 namespace ex = stdexec;
 
 template <typename T>
-concept SlashAndButtonCmd = std::same_as<T, dpp::slashcommand_t> || std::same_as<T, dpp::button_click_t>;
+concept SlashAndButtonCmd = std::same_as<T, dpp::slashcommand_t> || std::same_as<T, dpp::button_click_t> || std::same_as<T, dpp::form_submit_t>;
 
 class BotRouter {
 public:

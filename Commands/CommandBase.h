@@ -21,6 +21,7 @@ public:
 
     virtual void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
     virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
+    virtual void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) {}
 
 protected:
     static std::vector<std::string> parseButtonId(const std::string &button_id, const std::string &delimiter = "::") {
@@ -76,6 +77,24 @@ protected:
         vc_bot->voiceclient->set_send_audio_type(dpp::discord_voice_client::satype_live_audio);
         return true;
     }
+
+    // utils
+    static auto random_gen_id(int len=4) -> std::string {
+        static constexpr  char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        thread_local static std::mt19937_64 rng(std::random_device{}());
+        std::uniform_int_distribution<std::size_t> dist(0, sizeof(chars) - 2);
+        std::string s; s.reserve(len);
+        for (int i = 0; i < len; ++i) s.push_back(chars[dist(rng)]);
+        return s;
+    }
+
+    // utils
+    static auto get_user_name_from_event(const dpp::interaction_create_t &event) -> std::string {
+        return event.command.member.get_nickname().empty()
+                    ? event.command.usr.username
+                    : event.command.member.get_nickname();
+    }
+
 
     std::shared_ptr<ToolInterface> tool_interface_;
 };

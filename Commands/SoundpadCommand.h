@@ -5,6 +5,7 @@
 #ifndef DASH_N_BARK_SOUNDPADCOMMAND_H
 #define DASH_N_BARK_SOUNDPADCOMMAND_H
 
+#include <mutex>
 #include "CommandBase.h"
 
 class SoundpadCommand : public CommandBase {
@@ -15,10 +16,29 @@ private:
         std::string tag;
         bool by_tag;
     };
-    std::optional<std::map<int, std::string>> soundpad_mappings_;
-    std::optional<PagedComponent> soundpad_pagination_;
-    std::optional<std::string> command_uid_;
-    int soundpad_volume_ = 100;
+
+    // Per-invocation state for a single /soundpad session.
+    // Keyed by a random UID embedded in every button/modal custom_id so that
+    // concurrent sessions (multiple users, multiple /soundpad messages) are
+    // completely independent and cannot interfere with each other.
+    struct SoundpadSession {
+        std::map<int, std::string> mappings;  // current page: clip_id -> clip_name
+        PagedComponent pagination;             // pagination state for the current view
+        int volume = 100;                      // current playback volume (10-100)
+        std::time_t created_at = 0;           // unix timestamp used for TTL expiry
+        std::string invoker_name;              // display name of the user who ran /soundpad
+        std::string last_action;              // human-readable description of the most recent interaction
+    };
+
+    static constexpr int MAX_SESSIONS = 10;          // hard cap on concurrent sessions
+    static constexpr int SESSION_EXPIRE_SECS = 180;  // buttons expire after 3 min (Discord's default TTL)
+    static constexpr int SESSION_CLEANUP_SECS = SESSION_EXPIRE_SECS * 1.2;  // GC threshold
+    // Component ID for the page-number text input inside the Jump modal.
+    // Discord modals only support text inputs, so the value is validated server-side.
+    static constexpr const char* JUMP_PAGE_COMPONENT_ID = "page_number";
+
+    std::map<std::string, SoundpadSession> sessions_;
+    mutable std::mutex sessions_mutex_;
 
     #ifdef NDEBUG
     static constexpr int PAGE_SIZE = 15;
@@ -35,20 +55,53 @@ private:
         return s;
     }
 
-    void clean_up() {
-        soundpad_mappings_.reset();
-        soundpad_pagination_.reset();
-        command_uid_.reset();
+    // Build the header line shown in every soundpad message so the channel can
+    // always see who owns the session and what the most recent interaction was.
+    // Format: "Soundpad (by <invoker>)\nLast: <action>"
+    [[nodiscard]] static std::string build_status_line(const SoundpadSession& session) {
+        std::string line = "Soundpad";
+        if (!session.invoker_name.empty()) {
+            line += " (by " + session.invoker_name + ")";
+        }
+        if (!session.last_action.empty()) {
+            line += "\nLast: " + session.last_action;
+        }
+        return line;
     }
 
-    [[nodiscard]] std::vector<dpp::component> build_soundpad_component(bool isTag = false, int items_per_row = 5) const {
-        if (!soundpad_mappings_ || soundpad_mappings_->empty() || !command_uid_) {
-            return {}; // return empty vector if no mappings
+    // Remove sessions older than SESSION_CLEANUP_SECS, then evict the oldest
+    // entry if the hard cap MAX_SESSIONS is still exceeded.
+    // Must be called with sessions_mutex_ held.
+    void evict_old_sessions() {
+        auto now = std::time(nullptr);
+        for (auto it = sessions_.begin(); it != sessions_.end(); ) {
+            if (now - it->second.created_at >= SESSION_CLEANUP_SECS) {
+                it = sessions_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (sessions_.size() >= MAX_SESSIONS) {
+            auto oldest = sessions_.begin();
+            for (auto it = std::next(oldest); it != sessions_.end(); ++it) {
+                if (it->second.created_at < oldest->second.created_at) {
+                    oldest = it;
+                }
+            }
+            sessions_.erase(oldest);
+        }
+    }
+
+    [[nodiscard]] std::vector<dpp::component> build_soundpad_component(
+            const SoundpadSession& session, const std::string& uid,
+            bool isTag = false, int items_per_row = 5) const {
+        if (session.mappings.empty()) {
+            return {};
         }
 
         if (items_per_row <= 0) items_per_row = 3;
         auto ts = std::to_string(static_cast<long long>(std::time(nullptr)));
-        auto page = soundpad_pagination_.value().current_page;
+        auto page = session.pagination.current_page;
         std::vector<dpp::component> rows;
 
         // Volume row: [-] [ volume ] [+]
@@ -58,15 +111,15 @@ private:
                 .set_type(dpp::cot_button)
                 .set_label("-")
                 .set_style(dpp::cos_secondary)
-                .set_disabled(soundpad_volume_ <= 10)
-                .set_id("soundpad::vol_down::" + std::to_string(soundpad_volume_) + "::" + ts + "::" +command_uid_.value())
+                .set_disabled(session.volume <= 10)
+                .set_id("soundpad::vol_down::" + std::to_string(session.volume) + "::" + ts + "::" + uid)
         );
         vol_row.add_component(
             dpp::component()
                 .set_type(dpp::cot_button)
-                .set_label("Vol " + std::to_string(soundpad_volume_))
+                .set_label("Vol " + std::to_string(session.volume))
                 .set_style(dpp::cos_secondary)
-                .set_id("soundpad::vol_display::" + std::to_string(soundpad_volume_) + "::" + ts + "::" +command_uid_.value())
+                .set_id("soundpad::vol_display::" + std::to_string(session.volume) + "::" + ts + "::" + uid)
                 .set_disabled(true)
         );
         vol_row.add_component(
@@ -74,116 +127,152 @@ private:
                 .set_type(dpp::cot_button)
                 .set_label("+")
                 .set_style(dpp::cos_secondary)
-                .set_disabled(soundpad_volume_ >= 100)
-                .set_id("soundpad::vol_up::" + std::to_string(soundpad_volume_) + "::" + ts + "::" +command_uid_.value())
+                .set_disabled(session.volume >= 100)
+                .set_id("soundpad::vol_up::" + std::to_string(session.volume) + "::" + ts + "::" + uid)
         );
         rows.push_back(vol_row);
 
-        // Mapping buttons: paginated, up to 15 per page, configurable items per row
-        if (soundpad_mappings_ && !soundpad_mappings_->empty()) {
-            dpp::component row;
-            int in_row = 0;
-            int added = 0;
-            const int per_page = PAGE_SIZE;
+        // Mapping buttons: paginated, up to PAGE_SIZE per page, configurable items per row
+        dpp::component row;
+        int in_row = 0;
+        int added = 0;
+        const int per_page = PAGE_SIZE;
 
-            for (const auto &entry : *soundpad_mappings_) {
-                if (added >= per_page) break;
+        for (const auto &entry : session.mappings) {
+            if (added >= per_page) break;
 
-                const std::string &label = entry.second;
-                int id = entry.first;
+            const std::string &label = entry.second;
+            int id = entry.first;
 
-                row.add_component(
-                    dpp::component()
-                        .set_type(dpp::cot_button)
-                        .set_label(label)
-                        .set_style(dpp::cos_primary)
-                        .set_id("soundpad::" + std::string(isTag ? "tag" : "play") +
-                                "::" + (isTag ? label : std::to_string(id)) +
-                                "::" + ts + "::" +command_uid_.value())
-                );
+            row.add_component(
+                dpp::component()
+                    .set_type(dpp::cot_button)
+                    .set_label(label)
+                    .set_style(dpp::cos_primary)
+                    .set_id("soundpad::" + std::string(isTag ? "tag" : "play") +
+                            "::" + (isTag ? label : std::to_string(id)) +
+                            "::" + ts + "::" + uid)
+            );
 
-                ++in_row;
-                ++added;
-                if (in_row == items_per_row) {
-                    rows.push_back(row);
-                    row = dpp::component();
-                    in_row = 0;
-                }
-            }
-            if (in_row > 0) {
+            ++in_row;
+            ++added;
+            if (in_row == items_per_row) {
                 rows.push_back(row);
+                row = dpp::component();
+                in_row = 0;
             }
+        }
+        if (in_row > 0) {
+            rows.push_back(row);
+        }
 
-            // Navigation row: [Prev] [ Page X ] [Next]
-            dpp::component nav_row;
-            // Prev button (disabled when on first page)
-            dpp::component prev_btn;
-            prev_btn.set_type(dpp::cot_button)
-                    .set_label("<")
-                    .set_style(dpp::cos_secondary)
-                    .set_id("soundpad::page_prev::" + std::to_string(page) + "::" + ts + "::" +command_uid_.value());
-            if (page <= 0) prev_btn.set_disabled(true);
-            nav_row.add_component(prev_btn);
+        // Navigation row: [<] [Page X/Y] [>] [Jump]
+        dpp::component nav_row;
+        dpp::component prev_btn;
+        prev_btn.set_type(dpp::cot_button)
+                .set_label("<")
+                .set_style(dpp::cos_secondary)
+                .set_id("soundpad::page_prev::" + std::to_string(page) + "::" + ts + "::" + uid);
+        if (page <= 0) prev_btn.set_disabled(true);
+        nav_row.add_component(prev_btn);
 
-            // Page display
+        nav_row.add_component(
+            dpp::component()
+                .set_type(dpp::cot_button)
+                .set_label("Page " + std::to_string(page + 1) +
+                        " / " + std::to_string(session.pagination.total_pages))
+                .set_style(dpp::cos_secondary)
+                .set_id("soundpad::page_display::" + std::to_string(page) + "::" + ts + "::" + uid)
+                .set_disabled(true)
+        );
+
+        dpp::component next_btn;
+        next_btn.set_type(dpp::cot_button)
+                .set_label(">")
+                .set_style(dpp::cos_secondary)
+                .set_id("soundpad::page_next::" + std::to_string(page) + "::" + ts + "::" + uid);
+        if (page >= session.pagination.total_pages - 1) next_btn.set_disabled(true);
+        nav_row.add_component(next_btn);
+
+        // Jump to page button (only shown when there are multiple pages)
+        if (session.pagination.total_pages > 1) {
             nav_row.add_component(
                 dpp::component()
                     .set_type(dpp::cot_button)
-                    .set_label("Page " + std::to_string(page + 1) +
-                            " / " + std::to_string(soundpad_pagination_.value().total_pages))
+                    .set_label("Jump")
                     .set_style(dpp::cos_secondary)
-                    .set_id("soundpad::page_display::" + std::to_string(page) + "::" + ts + "::" +command_uid_.value())
-                    .set_disabled(true)
+                    .set_id("soundpad::page_jump::0::" + ts + "::" + uid)
             );
-
-            // Next button (disabled if fewer than per_page items were added)
-            dpp::component next_btn;
-            next_btn.set_type(dpp::cot_button)
-                    .set_label(">")
-                    .set_style(dpp::cos_secondary)
-                    .set_id("soundpad::page_next::" + std::to_string(page) + "::" + ts + "::" +command_uid_.value());
-            if (page >= soundpad_pagination_.value().total_pages-1) next_btn.set_disabled(true);
-            nav_row.add_component(next_btn);
-
-            rows.push_back(nav_row);
         }
+
+        rows.push_back(nav_row);
 
         return rows;
     }
 
-    void reply_with_button_msg(const dpp::button_click_t &event, const std::string &content, bool is_tag = false, bool edit = false) const {
-        dpp::message msg(event.command.channel_id, content);
-        for (auto &comp : build_soundpad_component(is_tag)) {
+    [[nodiscard]] dpp::message build_soundpad_message(
+            dpp::snowflake channel_id, const SoundpadSession& session, const std::string& uid,
+            const std::string& content, bool is_tag = false) const {
+        dpp::message msg(channel_id, content);
+        for (auto &comp : build_soundpad_component(session, uid, is_tag)) {
             msg.add_component(comp);
         }
-        if (edit) {
-            event.edit_original_response(msg);
-        } else {
-            event.reply(dpp::ir_update_message, msg);
-        }
+        return msg;
     }
 
-    void update_button_page(const dpp::button_click_t &event, bool is_tag = false) {
+    // Fetches the current page data and updates the session, then sends the reply.
+    // session.last_action should be updated before calling this.
+    // Must be called with sessions_mutex_ held.
+    void update_button_page(const dpp::button_click_t &event,
+                            SoundpadSession& session, const std::string& uid) {
         decltype(tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE,
-            soundpad_pagination_->total_pages, "")) res;
+            session.pagination.total_pages, "")) res;
+        bool is_tag = session.pagination.by_tag;
         if (is_tag) {
             res = tool_interface_->listTagsPaged(
-                                    soundpad_pagination_->current_page, PAGE_SIZE,
-                                    soundpad_pagination_->total_pages);
+                                    session.pagination.current_page, PAGE_SIZE,
+                                    session.pagination.total_pages);
         } else {
             res = tool_interface_->listSoundpadClipsPaged(
-                                    soundpad_pagination_->current_page, PAGE_SIZE,
-                                    soundpad_pagination_->total_pages, soundpad_pagination_->tag);
+                                    session.pagination.current_page, PAGE_SIZE,
+                                    session.pagination.total_pages, session.pagination.tag);
         }
-        if (!res.success || ! res.data.has_value() || soundpad_pagination_->total_pages == 0) {
+        if (!res.success || !res.data.has_value() || session.pagination.total_pages == 0) {
             event.reply(dpp::ir_update_message, "Fetch data failed");
-            clean_up();
+            sessions_.erase(uid);
             return;
         }
-        soundpad_mappings_.reset();
-        soundpad_mappings_ = res.data.value();
-        reply_with_button_msg(event,
-            is_tag ? "Select your tag:" : "Page " + std::to_string(soundpad_pagination_->current_page + 1), is_tag);
+        session.mappings = res.data.value();
+        auto msg = build_soundpad_message(event.command.channel_id, session, uid,
+            build_status_line(session), is_tag);
+        event.reply(dpp::ir_update_message, msg);
+    }
+
+    // Fetches the current page data, updates the session, then edits the original response.
+    // Used after a modal submission. Must be called with sessions_mutex_ held.
+    void update_page_edit_response(const dpp::form_submit_t &event,
+                                   SoundpadSession& session, const std::string& uid) {
+        decltype(tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE,
+            session.pagination.total_pages, "")) res;
+        bool is_tag = session.pagination.by_tag;
+        if (is_tag) {
+            res = tool_interface_->listTagsPaged(
+                                    session.pagination.current_page, PAGE_SIZE,
+                                    session.pagination.total_pages);
+        } else {
+            res = tool_interface_->listSoundpadClipsPaged(
+                                    session.pagination.current_page, PAGE_SIZE,
+                                    session.pagination.total_pages, session.pagination.tag);
+        }
+        if (!res.success || !res.data.has_value() || session.pagination.total_pages == 0) {
+            event.edit_original_response(dpp::message("Fetch data failed"));
+            sessions_.erase(uid);
+            return;
+        }
+        session.mappings = res.data.value();
+        auto msg = build_soundpad_message(event.command.channel_id, session, uid,
+            build_status_line(session), is_tag);
+        event.edit_original_response(msg);
     }
 
 public:
@@ -193,11 +282,9 @@ public:
         : CommandBase(std::move(tool_interface)) {}
 
     void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        // get and verify params
         auto use_tag = std::holds_alternative<bool>(event.get_parameter("by_tag"))
                 ? std::get<bool>(event.get_parameter("by_tag")) : false;
 
-        // query soundpad db
         int local_total_pages = 0;
         decltype(tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE, local_total_pages, "")) res;
         if (use_tag) {
@@ -205,84 +292,197 @@ public:
         } else {
             res = tool_interface_->listSoundpadClipsPaged(0, PAGE_SIZE, local_total_pages, "");
         }
-        if (!res.success || ! res.data.has_value() || local_total_pages == 0) {
+        if (!res.success || !res.data.has_value() || local_total_pages == 0) {
             event.reply("Soundpad empty or unavailable.");
             return;
         }
-        clean_up();
-        soundpad_mappings_ = res.data.value();
-        soundpad_pagination_ = PagedComponent{0, local_total_pages, "", use_tag};
-        command_uid_ = random_gen_id();
 
-        // build message with button components
-        dpp::message msg(event.command.channel_id, use_tag ? "Select your tag:" : "Soundpad Clips");
-        for (auto &comp : build_soundpad_component(use_tag)) {
-            msg.add_component(comp);
+        std::string uid;
+        dpp::message msg;
+        {
+            std::lock_guard<std::mutex> lg(sessions_mutex_);
+            uid = random_gen_id();
+            evict_old_sessions();
+            SoundpadSession& session = sessions_[uid];
+            session.mappings = res.data.value();
+            session.pagination = {0, local_total_pages, "", use_tag};
+            session.volume = 100;
+            session.created_at = std::time(nullptr);
+            session.invoker_name = get_user_name_from_event(event);
+            session.last_action = "Opened soundpad" + std::string(use_tag ? " tag view" : "");
+
+            msg = build_soundpad_message(event.command.channel_id, session, uid,
+                use_tag ? "Select your tag:" : build_status_line(session), use_tag);
         }
 
-        // Reply to the user with our message.
         event.reply(msg);
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
         auto ids = parseButtonId(event.custom_id);
-        // verify timestamp and command uid
         if (ids.size() != 5 || ids[0] != "soundpad") {
             event.reply("Invalid button ID for soundpad");
             return;
         }
         auto recv_ts = std::stoll(ids[3]);
         auto now_ts = std::time(nullptr);
-        if (!command_uid_ || ids[4] != command_uid_.value()) {
-            event.reply(dpp::ir_update_message, "This soundpad interaction is no longer valid.");
-            return;
-        }
-        if (std::abs(now_ts - recv_ts) > 180) {
-            // 3 minutes expiration
+        const std::string& uid = ids[4];
+        const std::string& cmd = ids[1];
+        const std::string& cmd_param = ids[2];
+
+        if (now_ts - recv_ts > SESSION_EXPIRE_SECS) {
             event.reply(dpp::ir_update_message, "This soundpad interaction has expired.");
-            clean_up();
-            return;
-        }
-        if (!soundpad_mappings_ || !soundpad_pagination_) {
-            event.reply(dpp::ir_update_message, "Soundpad state is invalid. Please try again.");
-            clean_up();
+            std::lock_guard<std::mutex> lg(sessions_mutex_);
+            sessions_.erase(uid);
             return;
         }
 
-        // process commands
-        auto cmd = ids[1];
-        auto cmd_param = ids[2];
+        std::unique_lock<std::mutex> lock(sessions_mutex_);
+        auto it = sessions_.find(uid);
+        if (it == sessions_.end()) {
+            lock.unlock();
+            event.reply(dpp::ir_update_message, "This soundpad interaction is no longer valid.");
+            return;
+        }
+        SoundpadSession& session = it->second;
+
         if (cmd == "vol_down") {
-            soundpad_volume_ = std::max(10, soundpad_volume_ - 10);
-            reply_with_button_msg(event, "Volume decreased to " + std::to_string(soundpad_volume_), soundpad_pagination_->by_tag);
+            session.volume = std::max(10, session.volume - 10);
+            auto msg = build_soundpad_message(event.command.channel_id, session, uid,
+                build_status_line(session), session.pagination.by_tag);
+            lock.unlock();
+            event.reply(dpp::ir_update_message, msg);
         } else if (cmd == "vol_up") {
-            soundpad_volume_ = std::min(100, soundpad_volume_ + 10);
-            reply_with_button_msg(event, "Volume increased to " + std::to_string(soundpad_volume_), soundpad_pagination_->by_tag);
+            session.volume = std::min(100, session.volume + 10);
+            auto msg = build_soundpad_message(event.command.channel_id, session, uid,
+                build_status_line(session), session.pagination.by_tag);
+            lock.unlock();
+            event.reply(dpp::ir_update_message, msg);
         } else if (cmd == "page_prev") {
-            soundpad_pagination_->current_page = std::max(0, soundpad_pagination_->current_page - 1);
-            update_button_page(event, soundpad_pagination_->by_tag);
+            session.pagination.current_page = std::max(0, session.pagination.current_page - 1);
+            update_button_page(event, session, uid);
         } else if (cmd == "page_next") {
-            soundpad_pagination_->current_page = std::min(soundpad_pagination_->total_pages - 1, soundpad_pagination_->current_page + 1);
-            update_button_page(event, soundpad_pagination_->by_tag);
+            session.pagination.current_page = std::min(
+                session.pagination.total_pages - 1, session.pagination.current_page + 1);
+            update_button_page(event, session, uid);
+        } else if (cmd == "page_jump") {
+            int total = session.pagination.total_pages;
+            lock.unlock();
+            auto ts = std::to_string(static_cast<long long>(std::time(nullptr)));
+            dpp::interaction_modal_response modal(
+                "soundpad::jump_modal::" + ts + "::" + uid,
+                "Jump to Page"
+            );
+            modal.add_component(
+                dpp::component()
+                    .set_type(dpp::cot_text)
+                    .set_label("Page Number (1 - " + std::to_string(total) + ")")
+                    .set_id(JUMP_PAGE_COMPONENT_ID)
+                    .set_placeholder("Enter a page number")
+                    .set_required(true)
+                    .set_min_length(1)
+                    .set_max_length(5)
+                    .set_text_style(dpp::text_short)
+            );
+            event.dialog(modal);
         } else if (cmd == "play") {
+            int clip_id;
+            try {
+                clip_id = std::stoi(cmd_param);
+            } catch (...) {
+                lock.unlock();
+                event.reply(dpp::ir_update_message, "Invalid clip ID.");
+                return;
+            }
+            if (session.mappings.find(clip_id) == session.mappings.end()) {
+                lock.unlock();
+                event.reply(dpp::ir_update_message, "Clip not found.");
+                return;
+            }
+            int vol = session.volume;
+            bool is_tag = session.pagination.by_tag;
+            std::string clip_name = session.mappings.at(clip_id);
+            session.last_action = get_user_name_from_event(event) + " played " + clip_name;
+            auto msg = build_soundpad_message(event.command.channel_id, session, uid,
+                                                      build_status_line(session), is_tag);
+            lock.unlock();
+
             if (!joinVoiceChannel(event, true)) {
                 return;
             }
-            int clip_id = std::stoi(cmd_param);
-            auto res = tool_interface_->playSoundpadClip(clip_id, soundpad_volume_);
+            auto res = tool_interface_->playSoundpadClip(clip_id, vol);
             if (!res.success) {
-                event.edit_original_response(dpp::message("Failed to play clip ID: " + std::to_string(clip_id)));
+                event.edit_original_response(dpp::message(
+                    "Failed to play clip ID: " + std::to_string(clip_id)));
                 return;
             }
-            reply_with_button_msg(event, "Play clip: " + soundpad_mappings_->at(clip_id), soundpad_pagination_->by_tag, true);
+            event.edit_original_response(msg);
         } else if (cmd == "tag") {
-            soundpad_pagination_->current_page = 0;
-            soundpad_pagination_->tag = cmd_param;
-            soundpad_pagination_->by_tag = false;
-            update_button_page(event, false);
+            session.pagination.current_page = 0;
+            session.pagination.tag = cmd_param;
+            session.pagination.by_tag = false;
+            update_button_page(event, session, uid);
         } else {
+            lock.unlock();
             event.reply(dpp::ir_update_message, "Unknown command");
         }
+    }
+
+    void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) override {
+        auto ids = parseButtonId(event.custom_id);
+        if (ids.size() != 4 || ids[0] != "soundpad" || ids[1] != "jump_modal") {
+            event.reply("Invalid form submit for soundpad");
+            return;
+        }
+        auto recv_ts = std::stoll(ids[2]);
+        auto now_ts = std::time(nullptr);
+        const std::string& uid = ids[3];
+
+        // Acknowledge the modal: we will update the original component message
+        event.reply(dpp::ir_deferred_update_message, "");
+
+        if (now_ts - recv_ts > SESSION_EXPIRE_SECS) {
+            event.edit_original_response(dpp::message("This soundpad interaction has expired."));
+            std::lock_guard<std::mutex> lg(sessions_mutex_);
+            sessions_.erase(uid);
+            return;
+        }
+
+        // Extract the page number from the modal
+        std::string input;
+        if (event.components.empty() || event.components[0].custom_id != JUMP_PAGE_COMPONENT_ID) {
+            event.edit_original_response(dpp::message("Failed to read page number."));
+            return;
+        }
+        try {
+            input = std::get<std::string>(event.components[0].value);
+        } catch (...) {
+            event.edit_original_response(dpp::message("Failed to read page number."));
+            return;
+        }
+
+        int requested_page;
+        try {
+            requested_page = std::stoi(input) - 1; // Convert to 0-indexed
+        } catch (...) {
+            event.edit_original_response(dpp::message("Invalid page number: \"" + input + "\""));
+            return;
+        }
+
+        std::unique_lock<std::mutex> lock(sessions_mutex_);
+        auto it = sessions_.find(uid);
+        if (it == sessions_.end()) {
+            lock.unlock();
+            event.edit_original_response(dpp::message("This soundpad interaction is no longer valid."));
+            return;
+        }
+        SoundpadSession& session = it->second;
+
+        // Clamp to valid range
+        requested_page = std::max(0, std::min(session.pagination.total_pages - 1, requested_page));
+        session.pagination.current_page = requested_page;
+
+        update_page_edit_response(event, session, uid);
     }
 
 };
