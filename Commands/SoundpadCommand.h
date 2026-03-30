@@ -32,7 +32,7 @@ private:
 
     static constexpr int MAX_SESSIONS = 10;          // hard cap on concurrent sessions
     static constexpr int SESSION_EXPIRE_SECS = 180;  // buttons expire after 3 min (Discord's default TTL)
-    static constexpr int SESSION_CLEANUP_SECS = SESSION_EXPIRE_SECS * 2;  // GC threshold (6 min)
+    static constexpr int SESSION_CLEANUP_SECS = SESSION_EXPIRE_SECS * 1.2;  // GC threshold
     // Component ID for the page-number text input inside the Jump modal.
     // Discord modals only support text inputs, so the value is validated server-side.
     static constexpr const char* JUMP_PAGE_COMPONENT_ID = "page_number";
@@ -308,9 +308,11 @@ public:
             session.pagination = {0, local_total_pages, "", use_tag};
             session.volume = 100;
             session.created_at = std::time(nullptr);
+            session.invoker_name = get_user_name_from_event(event);
+            session.last_action = "Opened soundpad" + std::string(use_tag ? " tag view" : "");
 
             msg = build_soundpad_message(event.command.channel_id, session, uid,
-                use_tag ? "Select your tag:" : "Soundpad Clips", use_tag);
+                use_tag ? "Select your tag:" : build_status_line(session), use_tag);
         }
 
         event.reply(msg);
@@ -347,13 +349,13 @@ public:
         if (cmd == "vol_down") {
             session.volume = std::max(10, session.volume - 10);
             auto msg = build_soundpad_message(event.command.channel_id, session, uid,
-                "Volume decreased to " + std::to_string(session.volume), session.pagination.by_tag);
+                build_status_line(session), session.pagination.by_tag);
             lock.unlock();
             event.reply(dpp::ir_update_message, msg);
         } else if (cmd == "vol_up") {
             session.volume = std::min(100, session.volume + 10);
             auto msg = build_soundpad_message(event.command.channel_id, session, uid,
-                "Volume increased to " + std::to_string(session.volume), session.pagination.by_tag);
+                build_status_line(session), session.pagination.by_tag);
             lock.unlock();
             event.reply(dpp::ir_update_message, msg);
         } else if (cmd == "page_prev") {
@@ -400,7 +402,9 @@ public:
             int vol = session.volume;
             bool is_tag = session.pagination.by_tag;
             std::string clip_name = session.mappings.at(clip_id);
-            auto components = build_soundpad_component(session, uid, is_tag);
+            session.last_action = get_user_name_from_event(event) + " played " + clip_name;
+            auto msg = build_soundpad_message(event.command.channel_id, session, uid,
+                                                      build_status_line(session), is_tag);
             lock.unlock();
 
             if (!joinVoiceChannel(event, true)) {
@@ -411,10 +415,6 @@ public:
                 event.edit_original_response(dpp::message(
                     "Failed to play clip ID: " + std::to_string(clip_id)));
                 return;
-            }
-            dpp::message msg(event.command.channel_id, "Play clip: " + clip_name);
-            for (auto &comp : components) {
-                msg.add_component(comp);
             }
             event.edit_original_response(msg);
         } else if (cmd == "tag") {
