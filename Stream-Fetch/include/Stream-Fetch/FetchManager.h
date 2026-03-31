@@ -49,6 +49,7 @@ namespace StreamFetch {
 
         [[nodiscard]] StreamFetchResult fetchFromURL(const std::string &url) const;
         [[nodiscard]] std::vector<SearchResult> search(const std::string &keyword, int max_results = 5);
+        [[nodiscard]] std::vector<SearchResult> searchByPlatform(const std::string &keyword, const std::string &platform, int max_results = 10);
 
     private:
         [[nodiscard]] StreamFetchResult saveBilibiliVideo(const std::string &vid, int sub_index) const;

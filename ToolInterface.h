@@ -58,6 +58,7 @@ public:
 
     // search
     std::vector<StreamFetch::FetchManager::SearchResult> search(const std::string& keyword, int max_results = 10);
+    std::vector<StreamFetch::FetchManager::SearchResult> searchByPlatform(const std::string& keyword, const std::string& platform, int max_results = 10);
 
 private:
     std::string base_path_;

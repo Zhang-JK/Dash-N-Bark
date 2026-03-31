@@ -57,6 +57,7 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     pbot_->on_slashcommand(this->getCmdRouterFunction<dpp::slashcommand_t>());
     pbot_->on_button_click(this->getCmdRouterFunction<dpp::button_click_t>());
     pbot_->on_form_submit(this->getCmdRouterFunction<dpp::form_submit_t>());
+    pbot_->on_select_click(this->getCmdRouterFunction<dpp::select_click_t>());
 }
 
 BotRouter::~BotRouter() {
@@ -219,8 +220,14 @@ void BotRouter::setCmds() {
             new StreamCommand(tool_)
     );
     cmds_["search"] = std::make_tuple(
-        dpp::slashcommand("search", "Search videos on Youtube and Bilibili.", pbot_->me.id)
-            .add_localization("zh-CN", "搜索", "在 Youtube 和 Bilibili 上搜索视频。")
+        dpp::slashcommand("search", "Search videos on Youtube or Bilibili.", pbot_->me.id)
+            .add_localization("zh-CN", "搜索", "在 Youtube 或 Bilibili 上搜索视频。")
+            .add_option(
+                dpp::command_option(dpp::co_string, "platform", "Platform to search", true)
+                    .add_localization("zh-CN", "平台", "搜索平台")
+                    .add_choice(dpp::command_option_choice("YouTube", "youtube"))
+                    .add_choice(dpp::command_option_choice("Bilibili", "bilibili"))
+            )
             .add_option(
                 dpp::command_option(dpp::co_string, "keyword", "Search keyword", true)
                     .add_localization("zh-CN", "关键词", "搜索关键词")
@@ -417,4 +424,9 @@ void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::button_click
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::form_submit_t& event, std::shared_ptr<dpp::cluster> bot) {
     handler->form_submit(event, bot);
+}
+
+template<>
+void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::select_click_t& event, std::shared_ptr<dpp::cluster> bot) {
+    handler->select(event, bot);
 }

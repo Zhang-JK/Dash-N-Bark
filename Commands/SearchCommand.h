@@ -21,91 +21,184 @@ public:
         : CommandBase(std::move(tool_interface)) {}
 
     void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+        auto platform = std::get<std::string>(event.get_parameter("platform"));
         auto keyword = std::get<std::string>(event.get_parameter("keyword"));
-        spdlog::debug("Search command received keyword: {}", keyword);
+        spdlog::debug("Search command received keyword: {} on platform: {}", keyword, platform);
 
         event.thinking();
 
-        constexpr int max_per_platform = 50;
-        auto all_results = tool_interface_->search(keyword, max_per_platform);
-        if (all_results.empty()) {
-            event.edit_original_response(dpp::message("No search results found for \"" + keyword + "\""));
+        int max_results = (platform == "bilibili") ? 50 : 20;
+        auto results = tool_interface_->searchByPlatform(keyword, platform, max_results);
+        if (results.empty()) {
+            event.edit_original_response(dpp::message("No search results found for \"" + keyword + "\" on " + platform));
             return;
         }
 
-        std::string session_id = random_gen_id();
+        std::string uid = random_gen_id();
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
-            Session& session = sessions_[session_id];
-            session.results = std::move(all_results);
+            evict_old_sessions();
+            Session& session = sessions_[uid];
+            session.results = std::move(results);
             session.keyword = keyword;
+            session.platform = platform;
             session.current_page = 0;
             session.created_at = std::time(nullptr);
+            session.invoker_name = get_user_name_from_event(event);
+            session.last_action = "Opened search";
         }
 
-        auto msg = buildSearchResultMessage(session_id, sessions_[session_id]);
+        auto msg = buildSearchMessage(uid, sessions_[uid]);
         event.edit_original_response(msg);
     }
 
     void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        auto parts = parseButtonId(event.custom_id);
-        if (parts.empty()) return;
+        auto ids = parseButtonId(event.custom_id);
+        if (ids.empty() || ids[0] != "search" || ids.size() < 4) {
+            return;
+        }
 
-        if (parts[0] == "search_play") {
-            if (parts.size() < 3) {
-                event.reply(dpp::message("Invalid button data"));
+        const std::string& cmd = ids[1];
+        auto recv_ts = std::stoll(ids[2]);
+        const std::string& uid = ids[3];
+        auto now_ts = std::time(nullptr);
+
+        if (now_ts - recv_ts > SESSION_EXPIRE_SECS) {
+            {
+                std::lock_guard<std::mutex> lock(sessions_mutex_);
+                sessions_.erase(uid);
+            }
+            event.edit_original_response(dpp::message("This search interaction has expired."));
+            return;
+        }
+
+        Session* session_ptr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto it = sessions_.find(uid);
+            if (it == sessions_.end()) {
+                event.edit_original_response(dpp::message("Search session not found."));
                 return;
             }
+            session_ptr = &it->second;
+        }
 
-            std::string platform = parts[1];
-            std::string url_or_bvid = parts[2];
+        Session& session = *session_ptr;
+        std::string user_name = get_user_name_from_event(event);
+
+        if (cmd == "prev") {
+            session.current_page--;
+            session.last_action = user_name + " went to previous page";
+            auto msg = buildSearchMessage(uid, session);
+            event.edit_original_response(msg);
+        } else if (cmd == "next") {
+            session.current_page++;
+            session.last_action = user_name + " went to next page";
+            auto msg = buildSearchMessage(uid, session);
+            event.edit_original_response(msg);
+        } else if (cmd == "play") {
+            if (ids.size() < 5) {
+                return;
+            }
+            std::string vid = ids[4];
+            session.last_action = user_name + " played";
+
+            std::string url;
+            if (session.platform == "youtube") {
+                url = "https://www.youtube.com/watch?v=" + vid;
+            } else {
+                url = "https://www.bilibili.com/video/" + vid;
+            }
+
+            auto msg = buildSearchMessage(uid, session);
+            event.edit_original_response(msg);
 
             if (!joinVoiceChannel(event, true)) {
                 return;
             }
 
-            std::string url;
-            if (platform == "youtube") {
-                url = "https://www.youtube.com/watch?v=" + url_or_bvid;
-            } else {
-                url = "https://www.bilibili.com/video/" + url_or_bvid;
-            }
-
-            event.edit_original_response(dpp::message("Fetching audio from " + platform + "..."));
+            event.reply("Fetching audio...");
             auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 100);
             if (!tool_res.success || !tool_res.data.has_value()) {
-                event.edit_original_response(dpp::message("Failed to fetch with error code " +
-                            std::to_string(tool_res.error_code) + ": " + tool_res.message));
+                event.reply("Failed to fetch: " + tool_res.message);
                 return;
             }
-            event.edit_original_response(dpp::message("Streaming " + tool_res.data.value()));
-        } else if (parts[0] == "search_page") {
-            if (parts.size() < 3) return;
-
-            std::string session_id = parts[2];
-            int direction = std::stoi(parts[1]);
-
-            std::lock_guard<std::mutex> lock(sessions_mutex_);
-            auto it = sessions_.find(session_id);
-            if (it == sessions_.end()) {
-                event.reply(dpp::message("Search session expired. Please search again."));
-                return;
-            }
-
-            Session& session = it->second;
-            session.current_page += direction;
-
-            auto msg = buildSearchResultMessage(session_id, session);
-            event.edit_original_response(msg);
+            event.reply("Streaming " + tool_res.data.value());
         }
+    }
+
+    void select(const dpp::select_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+        auto ids = parseButtonId(event.custom_id);
+        if (ids.size() < 4 || ids[0] != "search" || ids[1] != "select") {
+            return;
+        }
+
+        auto recv_ts = std::stoll(ids[2]);
+        const std::string& uid = ids[3];
+        auto now_ts = std::time(nullptr);
+
+        if (now_ts - recv_ts > SESSION_EXPIRE_SECS) {
+            {
+                std::lock_guard<std::mutex> lock(sessions_mutex_);
+                sessions_.erase(uid);
+            }
+            event.edit_original_response(dpp::message("This search interaction has expired."));
+            return;
+        }
+
+        Session* session_ptr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto it = sessions_.find(uid);
+            if (it == sessions_.end()) {
+                event.reply("Search session not found.");
+                return;
+            }
+            session_ptr = &it->second;
+        }
+
+        Session& session = *session_ptr;
+        auto selected_values = event.values;
+
+        if (selected_values.empty()) {
+            return;
+        }
+
+        std::string vid = selected_values[0];
+        session.last_action = get_user_name_from_event(event) + " selected";
+
+        std::string url;
+        if (session.platform == "youtube") {
+            url = "https://www.youtube.com/watch?v=" + vid;
+        } else {
+            url = "https://www.bilibili.com/video/" + vid;
+        }
+
+        auto msg = buildSearchMessage(uid, session);
+        event.reply(dpp::ir_update_message, msg);
+
+        if (!joinVoiceChannel(event, true)) {
+            return;
+        }
+
+        event.reply("Fetching audio...");
+        auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 100);
+        if (!tool_res.success || !tool_res.data.has_value()) {
+            event.reply("Failed to fetch: " + tool_res.message);
+            return;
+        }
+        event.reply("Streaming " + tool_res.data.value());
     }
 
 private:
     struct Session {
         std::vector<StreamFetch::FetchManager::SearchResult> results;
         std::string keyword;
+        std::string platform;
         int current_page = 0;
         std::time_t created_at = 0;
+        std::string invoker_name;
+        std::string last_action;
     };
 
     static constexpr int RESULTS_PER_PAGE = 5;
@@ -145,86 +238,87 @@ private:
         }
     }
 
-    dpp::message buildSearchResultMessage(const std::string& session_id, const Session& session) {
-        int total_pages = (session.results.size() + RESULTS_PER_PAGE - 1) / RESULTS_PER_PAGE;
+    dpp::message buildSearchMessage(const std::string& uid, const Session& session) {
+        int total_results = static_cast<int>(session.results.size());
+        int total_pages = (total_results + RESULTS_PER_PAGE - 1) / RESULTS_PER_PAGE;
         int start_idx = session.current_page * RESULTS_PER_PAGE;
-        int end_idx = std::min(start_idx + RESULTS_PER_PAGE, static_cast<int>(session.results.size()));
+        int end_idx = std::min(start_idx + RESULTS_PER_PAGE, total_results);
+
+        auto ts = std::to_string(static_cast<long long>(std::time(nullptr)));
+
+        dpp::message msg;
+        std::string platform_label = (session.platform == "youtube") ? "YouTube" : "Bilibili";
+        msg.set_content("**" + platform_label + " Search** by " + session.invoker_name + 
+                       "\nLast: " + session.last_action + 
+                       "\nKeyword: " + session.keyword);
 
         dpp::embed embed;
-        embed.set_title("Search: " + session.keyword)
-              .set_description("Page " + std::to_string(session.current_page + 1) + "/" + std::to_string(total_pages) + 
-                               " (" + std::to_string(session.results.size()) + " results)")
-              .set_color(0x00D4FF);
+        embed.set_title(platform_label + " Results")
+              .set_color(session.platform == "youtube" ? 0xFF0000 : 0x00A1FF);
 
         std::string description;
-        std::vector<dpp::component> all_rows;
-        dpp::component current_row;
+        description += "**Page " + std::to_string(session.current_page + 1) + "/" + std::to_string(total_pages) + "**";
+        description += " (" + std::to_string(total_results) + " results)\n\n";
 
         for (int i = start_idx; i < end_idx; ++i) {
             const auto& r = session.results[i];
-            int display_num = i + 1;
+            description += std::to_string(i + 1) + ". **" + r.title + "**\n";
+            description += r.creator + " · " + r.view_count + " views\n";
+            description += r.duration + " · " + r.publish_date + "\n\n";
+        }
 
-            description += "**" + std::to_string(display_num) + ". " + r.title + "**\n";
-            description += r.creator + " | " + r.duration + " | " + r.view_count + " views | " + r.publish_date + "\n";
-            description += "[" + r.platform + "](" + r.url + ")\n\n";
+        embed.set_description(description);
+        msg.add_embed(embed);
 
-            dpp::component button;
-            button.set_type(dpp::cot_button)
-                  .set_label(r.platform == "youtube" ? "Play" : "播放")
-                  .set_style(dpp::cos_primary)
-                  .set_id("search_play::" + r.platform + "::" + r.bvid_or_vid);
+        dpp::component select_row;
+        select_row.set_type(dpp::cot_action_row);
+        dpp::component select_menu;
+        select_menu.set_type(dpp::cot_selectmenu);
+        select_menu.set_id("search::select::" + ts + "::" + uid);
+        select_menu.set_placeholder("Select a video to play...");
 
-            current_row.add_component(button);
-
-            if (current_row.components.size() >= 5) {
-                current_row.set_type(dpp::cot_action_row);
-                all_rows.push_back(current_row);
-                current_row = dpp::component();
+        for (int i = start_idx; i < end_idx; ++i) {
+            const auto& r = session.results[i];
+            std::string option_label = std::to_string(i + 1) + ". " + r.title;
+            if (option_label.length() > 100) {
+                option_label = option_label.substr(0, 97) + "...";
             }
+            select_menu.add_select_option(dpp::select_option(option_label, r.bvid_or_vid, 
+                r.creator + " | " + r.duration));
         }
 
-        if (!current_row.components.empty()) {
-            current_row.set_type(dpp::cot_action_row);
-            all_rows.push_back(current_row);
-        }
+        select_row.add_component(select_menu);
+        msg.add_component(select_row);
 
         dpp::component nav_row;
-        if (session.current_page > 0) {
-            nav_row.add_component(
-                dpp::component()
-                    .set_type(dpp::cot_button)
-                    .set_label("<")
-                    .set_style(dpp::cos_secondary)
-                    .set_id("search_page::-1::" + session_id)
-            );
-        }
+        nav_row.set_type(dpp::cot_action_row);
+        
+        auto prev_btn = dpp::component()
+            .set_type(dpp::cot_button)
+            .set_label("<")
+            .set_style(dpp::cos_secondary)
+            .set_id("search::prev::" + ts + "::" + uid);
+        if (session.current_page <= 0) prev_btn.set_disabled(true);
+        nav_row.add_component(prev_btn);
+
         nav_row.add_component(
             dpp::component()
                 .set_type(dpp::cot_button)
-                .set_label(std::to_string(session.current_page + 1) + "/" + std::to_string(total_pages))
+                .set_label(std::to_string(session.current_page + 1) + " / " + std::to_string(total_pages))
                 .set_style(dpp::cos_secondary)
-                .set_id("search_page::0::" + session_id)
+                .set_id("search::page::" + ts + "::" + uid)
                 .set_disabled(true)
         );
-        if (session.current_page < total_pages - 1) {
-            nav_row.add_component(
-                dpp::component()
-                    .set_type(dpp::cot_button)
-                    .set_label(">")
-                    .set_style(dpp::cos_secondary)
-                    .set_id("search_page::1::" + session_id)
-            );
-        }
-        nav_row.set_type(dpp::cot_action_row);
-        all_rows.push_back(nav_row);
 
-        embed.set_description(description);
+        auto next_btn = dpp::component()
+            .set_type(dpp::cot_button)
+            .set_label(">")
+            .set_style(dpp::cos_secondary)
+            .set_id("search::next::" + ts + "::" + uid);
+        if (session.current_page >= total_pages - 1) next_btn.set_disabled(true);
+        nav_row.add_component(next_btn);
 
-        dpp::message msg;
-        msg.add_embed(embed);
-        for (auto& row : all_rows) {
-            msg.add_component(row);
-        }
+        msg.add_component(nav_row);
 
         return msg;
     }

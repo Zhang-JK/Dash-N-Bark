@@ -533,4 +533,12 @@ namespace StreamFetch {
         return combined;
     }
 
+    std::vector<FetchManager::SearchResult> FetchManager::searchByPlatform(const std::string& keyword, const std::string& platform, int max_results) {
+        if (platform == "youtube") {
+            return searchYoutube(keyword, max_results);
+        } else {
+            return searchBilibili(keyword, max_results);
+        }
+    }
+
 } // StreamFetch

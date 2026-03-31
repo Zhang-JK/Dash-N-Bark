@@ -22,6 +22,7 @@ public:
     virtual void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
     virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
     virtual void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) {}
+    virtual void select(const dpp::select_click_t &event, std::shared_ptr<dpp::cluster> bot) {}
 
 protected:
     static std::vector<std::string> parseButtonId(const std::string &button_id, const std::string &delimiter = "::") {
