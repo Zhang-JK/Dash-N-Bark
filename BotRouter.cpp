@@ -15,6 +15,7 @@
 #include "Commands/SoundpadCommand.h"
 #include "Commands/AddCommand.h"
 #include "Commands/ParrotCommand.h"
+#include "Commands/SearchCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -216,6 +217,15 @@ void BotRouter::setCmds() {
                     .set_max_value(100)
             ),
             new StreamCommand(tool_)
+    );
+    cmds_["search"] = std::make_tuple(
+        dpp::slashcommand("search", "Search videos on Youtube and Bilibili.", pbot_->me.id)
+            .add_localization("zh-CN", "搜索", "在 Youtube 和 Bilibili 上搜索视频。")
+            .add_option(
+                dpp::command_option(dpp::co_string, "keyword", "Search keyword", true)
+                    .add_localization("zh-CN", "关键词", "搜索关键词")
+            ),
+        new SearchCommand(tool_)
     );
     cmds_["playlist"] = std::make_tuple(
         dpp::slashcommand("playlist", "Show the current song in queue.", pbot_->me.id)

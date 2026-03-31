@@ -292,3 +292,6 @@ void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t siz
     }
 }
 
+std::vector<StreamFetch::FetchManager::SearchResult> ToolInterface::search(const std::string& keyword, int max_results) {
+    return fetch_manager_->search(keyword, max_results);
+}

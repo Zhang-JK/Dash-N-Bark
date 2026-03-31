@@ -6,11 +6,62 @@
 
 #include <filesystem>
 #include <map>
+#include <sstream>
+#include <regex>
+#include <ctime>
+#include <iomanip>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 #include <cpr/cpr.h>
 
 #include "spdlog/spdlog.h"
+
+namespace {
+    std::string formatViewCount(long long count) {
+        if (count >= 1000000000) {
+            return std::to_string(count / 1000000000) + "." + std::to_string((count % 1000000000) / 100000000) + "B";
+        } else if (count >= 1000000) {
+            return std::to_string(count / 1000000) + "." + std::to_string((count % 1000000) / 100000) + "M";
+        } else if (count >= 1000) {
+            return std::to_string(count / 1000) + "." + std::to_string((count % 1000) / 100) + "K";
+        }
+        return std::to_string(count);
+    }
+
+    std::string formatDuration(int seconds) {
+        int hours = seconds / 3600;
+        int minutes = (seconds % 3600) / 60;
+        int secs = seconds % 60;
+        if (hours > 0) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", hours, minutes, secs);
+            return std::string(buf);
+        }
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%d:%02d", minutes, secs);
+        return std::string(buf);
+    }
+
+    std::string formatDate(time_t timestamp) {
+        if (timestamp == 0) return "unknown";
+        std::tm* tm = std::localtime(&timestamp);
+        char buffer[32];
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", tm);
+        return std::string(buffer);
+    }
+
+    std::string htmlUnescape(const std::string& input) {
+        std::string result = input;
+        std::regex em_tag("<em class=\"keyword\">(.*?)</em>");
+        result = std::regex_replace(result, em_tag, "$1");
+        result = std::regex_replace(result, std::regex("&amp;"), "&");
+        result = std::regex_replace(result, std::regex("&lt;"), "<");
+        result = std::regex_replace(result, std::regex("&gt;"), ">");
+        result = std::regex_replace(result, std::regex("&quot;"), "\"");
+        return result;
+    }
+}
 
 namespace StreamFetch {
     #if defined(_DEBUG) || defined(DEBUG) || !defined(NDEBUG)
@@ -316,5 +367,150 @@ namespace StreamFetch {
         return output_path;
     }
 
+    std::vector<FetchManager::SearchResult> FetchManager::searchBilibili(const std::string& keyword, int max_results) const {
+        std::vector<SearchResult> results;
+        auto doSearch = [this, &results, &keyword, max_results]() -> bool {
+            auto response = cpr::Get(
+                cpr::Url{"https://api.bilibili.com/x/web-interface/search/type"},
+                cpr::Header{
+                    // {"Cookie", "buvid3=" + buvid},   // buvid3 may not be necessary, you can retry for few times
+                    {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+                    {"Referer", "https://www.bilibili.com/"}
+                },
+                cpr::Parameters{
+                    {"search_type", "video"},
+                    {"keyword", keyword},
+                    {"page", "1"},
+                    {"page_size", std::to_string(max_results)}
+                }
+            );
+            if (response.status_code == 412) {
+                return false;
+            }
+            if (response.status_code != 200) {
+                spdlog::warn("Bilibili search failed with status: {}", response.status_code);
+                return true;
+            }
+            auto j = nlohmann::json::parse(response.text);
+            if (j.value("code", -1) != 0) {
+                if (j.value("code", -1) == -412) {
+                    return false;
+                }
+                spdlog::warn("Bilibili search API error: {}", j.value("message", "unknown"));
+                return true;
+            }
+            if (!j.contains("data") || !j["data"].contains("result")) {
+                return true;
+            }
+            for (const auto& v : j["data"]["result"]) {
+                if (results.size() >= static_cast<size_t>(max_results)) break;
+                SearchResult r;
+                r.platform = "bilibili";
+                r.title = htmlUnescape(v.value("title", ""));
+                r.creator = v.value("author", "");
+                r.duration = v.value("duration", "");
+                r.view_count = formatViewCount(v.value("play", 0LL));
+                r.publish_date = formatDate(v.value("pubdate", 0));
+                r.url = "https://www.bilibili.com/video/" + v.value("bvid", "");
+                r.bvid_or_vid = v.value("bvid", "");
+                results.push_back(r);
+            }
+            return true;
+        };
+
+        try {
+            int search_count = 0;
+            while (!doSearch()) {
+                search_count++;
+                if (search_count >= max_results) {
+                    spdlog::warn("Bilibili search repeatedly hit anti-crawling measures, aborting search");
+                    break;
+                }
+            }
+            spdlog::debug("Bilibili search completed with {} results", results.size());
+        } catch (const std::exception& e) {
+            spdlog::error("Exception in Bilibili search: {}", e.what());
+        }
+        return results;
+    }
+
+    std::vector<FetchManager::SearchResult> FetchManager::searchYoutube(const std::string& keyword, int max_results) const {
+        std::vector<SearchResult> results;
+        try {
+            std::string cmd = "timeout 30s ./bin/yt-dlp_linux \"ytsearch" + 
+                              std::to_string(max_results) + ":" + keyword + 
+                              "\" --dump-json --flat-playlist --cookies " + GLOBAL_WORKING_DIR + "cookies.txt 2>/dev/null";
+            
+            spdlog::debug("Executing YouTube search: {}", cmd);
+            
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                spdlog::error("Failed to execute yt-dlp search");
+                return results;
+            }
+            char buffer[4096];
+            std::string output;
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                output += buffer;
+            }
+            pclose(pipe);
+            
+            std::istringstream stream(output);
+            std::string line;
+            while (std::getline(stream, line) && results.size() < static_cast<size_t>(max_results)) {
+                try {
+                    auto j = nlohmann::json::parse(line);
+                    SearchResult r;
+                    r.platform = "youtube";
+                    r.title = j.value("title", "");
+                    r.creator = j.value("channel", "");
+                    int duration = 0;
+                    if (!j["duration"].is_null()) {
+                        duration = j.value("duration", 0);
+                    }
+                    r.duration = formatDuration(duration);
+                    long long views = 0;
+                    if (!j["view_count"].is_null()) {
+                        views = j.value("view_count", 0LL);
+                    }
+                    r.view_count = formatViewCount(views);
+                    time_t timestamp = 0;
+                    if (!j["timestamp"].is_null()) {
+                        timestamp = j.value("timestamp", 0);
+                    }
+                    r.publish_date = formatDate(timestamp);
+                    r.url = j.value("webpage_url", "");
+                    r.bvid_or_vid = j.value("id", "");
+                    results.push_back(r);
+                } catch (const std::exception& e) {
+                    spdlog::debug("Failed to parse YouTube search result: {}", e.what());
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("Exception in YouTube search: {}", e.what());
+        }
+        return results;
+    }
+
+    std::vector<FetchManager::SearchResult> FetchManager::search(const std::string& keyword, int max_results) {
+        std::vector<SearchResult> yt_results;
+        std::vector<SearchResult> bili_results;
+
+        std::thread yt_thread([this, &keyword, max_results, &yt_results]() {
+            yt_results = searchYoutube(keyword, max_results);
+        });
+        std::thread bili_thread([this, &keyword, max_results, &bili_results]() {
+            bili_results = searchBilibili(keyword, max_results);
+        });
+
+        yt_thread.join();
+        bili_thread.join();
+        
+        std::vector<SearchResult> combined;
+        combined.reserve(yt_results.size() + bili_results.size());
+        combined.insert(combined.end(), yt_results.begin(), yt_results.end());
+        combined.insert(combined.end(), bili_results.begin(), bili_results.end());
+        return combined;
+    }
 
 } // StreamFetch
