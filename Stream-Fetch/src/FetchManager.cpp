@@ -51,6 +51,29 @@ namespace {
         return std::string(buffer);
     }
 
+    time_t parseYoutubeUploadDate(const std::string& video_id) {
+        try {
+            auto response = cpr::Get(cpr::Url{"https://www.youtube.com/watch?v=" + video_id},
+                cpr::Header{{"User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}});
+            if (response.status_code == 200) {
+                std::regex date_regex("\"uploadDate\"\\s*:\\s*\"([^\"]+)\"");
+                std::smatch match;
+                if (std::regex_search(response.text, match, date_regex)) {
+                    std::string date_str = match[1].str();
+                    std::tm tm = {};
+                    std::istringstream ss(date_str);
+                    ss >> std::get_time(&tm, "%Y-%m-%d");
+                    if (!ss.fail()) {
+                        return std::mktime(&tm);
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::debug("Failed to get upload date for {}: {}", video_id, e.what());
+        }
+        return 0;
+    }
+
     std::string htmlUnescape(const std::string& input) {
         std::string result = input;
         std::regex em_tag("<em class=\"keyword\">(.*?)</em>");
@@ -474,13 +497,9 @@ namespace StreamFetch {
                         views = j.value("view_count", 0LL);
                     }
                     r.view_count = formatViewCount(views);
-                    time_t timestamp = 0;
-                    if (!j["timestamp"].is_null()) {
-                        timestamp = j.value("timestamp", 0);
-                    }
-                    r.publish_date = formatDate(timestamp);
                     r.url = j.value("webpage_url", "");
                     r.bvid_or_vid = j.value("id", "");
+                    r.publish_date = formatDate(parseYoutubeUploadDate(r.bvid_or_vid));
                     results.push_back(r);
                 } catch (const std::exception& e) {
                     spdlog::debug("Failed to parse YouTube search result: {}", e.what());
@@ -510,6 +529,7 @@ namespace StreamFetch {
         combined.reserve(yt_results.size() + bili_results.size());
         combined.insert(combined.end(), yt_results.begin(), yt_results.end());
         combined.insert(combined.end(), bili_results.begin(), bili_results.end());
+        spdlog::debug("Search completed with {} YouTube results and {} Bilibili results", yt_results.size(), bili_results.size());
         return combined;
     }
 
