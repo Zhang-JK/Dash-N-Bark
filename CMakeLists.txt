@@ -56,6 +56,7 @@ add_executable(${PROJECT_NAME}
         Commands/SoundpadCommand.h
         Commands/AddCommand.h
         Commands/ParrotCommand.h
+        Commands/SearchCommand.h
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)

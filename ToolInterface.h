@@ -56,6 +56,10 @@ public:
     ToolInvokeResult<> initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset = AudioMixer::VoiceChanger::VoicePreset::Baby);
     void recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id);
 
+    // search
+    std::vector<StreamFetch::FetchManager::SearchResult> search(const std::string& keyword, int max_results = 10);
+    std::vector<StreamFetch::FetchManager::SearchResult> searchByPlatform(const std::string& keyword, const std::string& platform, int max_results = 10);
+
 private:
     std::string base_path_;
     std::shared_ptr<exec::static_thread_pool> ppool_;

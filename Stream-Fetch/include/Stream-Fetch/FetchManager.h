@@ -6,6 +6,9 @@
 #define DASH_N_BARK_FETCHMANAGER_H
 #include <optional>
 #include <string>
+#include <vector>
+#include <mutex>
+#include <chrono>
 
 namespace StreamFetch {
     class FetchManager {
@@ -27,6 +30,17 @@ namespace StreamFetch {
             }
         };
 
+        struct SearchResult {
+            std::string platform;
+            std::string title;
+            std::string creator;
+            std::string duration;
+            std::string view_count;
+            std::string publish_date;
+            std::string url;
+            std::string bvid_or_vid;
+        };
+
         enum class VideoPlatform {
             BILIBILI,
             YOUTUBE,
@@ -34,6 +48,8 @@ namespace StreamFetch {
         };
 
         [[nodiscard]] StreamFetchResult fetchFromURL(const std::string &url) const;
+        [[nodiscard]] std::vector<SearchResult> search(const std::string &keyword, int max_results = 5);
+        [[nodiscard]] std::vector<SearchResult> searchByPlatform(const std::string &keyword, const std::string &platform, int max_results = 10);
 
     private:
         [[nodiscard]] StreamFetchResult saveBilibiliVideo(const std::string &vid, int sub_index) const;
@@ -43,9 +59,12 @@ namespace StreamFetch {
         static std::optional<std::string> collectAndCache(const std::string &filename,
                                     VideoPlatform platform, const std::string &url);
 
+        [[nodiscard]] std::vector<SearchResult> searchBilibili(const std::string &keyword, int max_results) const;
+        [[nodiscard]] std::vector<SearchResult> searchYoutube(const std::string &keyword, int max_results) const;
+
+        int maxRetryTimeBiliSearch = 5;
         std::string baseSavePath;
-        // todo: implement storage limit management
-        std::size_t storageLimitMB = 1024; // Default 1GB
+        std::size_t storageLimitMB = 1024;
     };
 } // StreamFetch
 

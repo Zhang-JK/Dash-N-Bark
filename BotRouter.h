@@ -16,7 +16,7 @@
 namespace ex = stdexec;
 
 template <typename T>
-concept SlashAndButtonCmd = std::same_as<T, dpp::slashcommand_t> || std::same_as<T, dpp::button_click_t> || std::same_as<T, dpp::form_submit_t>;
+concept SlashAndButtonCmd = std::same_as<T, dpp::slashcommand_t> || std::same_as<T, dpp::button_click_t> || std::same_as<T, dpp::form_submit_t> || std::same_as<T, dpp::select_click_t>;
 
 class BotRouter {
 public:
@@ -29,6 +29,7 @@ public:
     auto getRegisterCmdFunction() -> std::function<void(const dpp::ready_t &event)>;
     template<SlashAndButtonCmd CmdType>
     auto getCmdRouterFunction() -> std::function<void(const CmdType &event)>;
+    std::string getCommandName(const std::string& str);
     template<SlashAndButtonCmd CmdType>
     std::string getCommandName(const CmdType& event);
     template<SlashAndButtonCmd CmdType>
