@@ -87,13 +87,24 @@ public:
         std::string user_name = get_user_name_from_event(event);
 
         if (cmd == "prev") {
-            session.current_page--;
-            session.last_action = user_name + " went to previous page";
+            if (session.current_page > 0) {
+                session.current_page--;
+                session.last_action = user_name + " went to previous page";
+            } else {
+                session.last_action = user_name + " is already at the first page";
+            }
             auto msg = buildSearchMessage(uid, session);
             event.reply(dpp::ir_update_message, msg);
         } else if (cmd == "next") {
-            session.current_page++;
-            session.last_action = user_name + " went to next page";
+            int total_results = static_cast<int>(session.results.size());
+            int total_pages = (total_results + RESULTS_PER_PAGE - 1) / RESULTS_PER_PAGE;
+            if (total_pages == 0) total_pages = 1;
+            if (session.current_page < total_pages - 1) {
+                session.current_page++;
+                session.last_action = user_name + " went to next page";
+            } else {
+                session.last_action = user_name + " is already at the last page";
+            }
             auto msg = buildSearchMessage(uid, session);
             event.reply(dpp::ir_update_message, msg);
         }

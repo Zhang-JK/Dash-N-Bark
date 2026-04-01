@@ -59,7 +59,6 @@ namespace StreamFetch {
         static std::optional<std::string> collectAndCache(const std::string &filename,
                                     VideoPlatform platform, const std::string &url);
 
-        [[nodiscard]] std::string getBuvid3() const;
         [[nodiscard]] std::vector<SearchResult> searchBilibili(const std::string &keyword, int max_results) const;
         [[nodiscard]] std::vector<SearchResult> searchYoutube(const std::string &keyword, int max_results) const;
 

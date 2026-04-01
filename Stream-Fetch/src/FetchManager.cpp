@@ -445,10 +445,11 @@ namespace StreamFetch {
             int search_count = 0;
             while (!doSearch()) {
                 search_count++;
-                if (search_count >= max_results) {
+                if (search_count >= maxRetryTimeBiliSearch) {
                     spdlog::warn("Bilibili search repeatedly hit anti-crawling measures, aborting search");
                     break;
                 }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
             }
             spdlog::debug("Bilibili search completed with {} results", results.size());
         } catch (const std::exception& e) {
