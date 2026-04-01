@@ -29,6 +29,7 @@ public:
     auto getRegisterCmdFunction() -> std::function<void(const dpp::ready_t &event)>;
     template<SlashAndButtonCmd CmdType>
     auto getCmdRouterFunction() -> std::function<void(const CmdType &event)>;
+    std::string getCommandName(const std::string& str);
     template<SlashAndButtonCmd CmdType>
     std::string getCommandName(const CmdType& event);
     template<SlashAndButtonCmd CmdType>

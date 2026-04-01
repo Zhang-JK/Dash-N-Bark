@@ -376,6 +376,14 @@ auto BotRouter::getCmdRouterFunction() -> std::function<void(const CmdType &even
     };
 }
 
+std::string BotRouter::getCommandName(const std::string& str) {
+    const auto pos = str.find("::");
+    if (pos == std::string::npos) {
+        return str;
+    }
+    return str.substr(0, pos);
+}
+
 template<SlashAndButtonCmd CmdType>
 std::string BotRouter::getCommandName(const CmdType& event) {
     throw std::runtime_error("Not implemented getCommandName");
@@ -388,22 +396,17 @@ std::string BotRouter::getCommandName(const dpp::slashcommand_t& event) {
 
 template<>
 std::string BotRouter::getCommandName(const dpp::button_click_t& event) {
-    const std::string id = event.custom_id;
-    const auto pos = id.find("::");
-    if (pos == std::string::npos) {
-        return id;
-    }
-    return id.substr(0, pos);
+    return getCommandName(event.custom_id);
 }
 
 template<>
 std::string BotRouter::getCommandName(const dpp::form_submit_t& event) {
-    const std::string id = event.custom_id;
-    const auto pos = id.find("::");
-    if (pos == std::string::npos) {
-        return id;
-    }
-    return id.substr(0, pos);
+    return getCommandName(event.custom_id);
+}
+
+template<>
+std::string BotRouter::getCommandName(const dpp::select_click_t& event) {
+    return getCommandName(event.custom_id);
 }
 
 template<SlashAndButtonCmd CmdType>

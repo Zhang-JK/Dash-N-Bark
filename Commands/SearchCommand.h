@@ -68,7 +68,7 @@ public:
                 std::lock_guard<std::mutex> lock(sessions_mutex_);
                 sessions_.erase(uid);
             }
-            event.edit_original_response(dpp::message("This search interaction has expired."));
+            event.reply(dpp::ir_update_message, dpp::message("This search interaction has expired."));
             return;
         }
 
@@ -77,7 +77,7 @@ public:
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             auto it = sessions_.find(uid);
             if (it == sessions_.end()) {
-                event.edit_original_response(dpp::message("Search session not found."));
+                event.reply(dpp::ir_update_message, dpp::message("Search session not found."));
                 return;
             }
             session_ptr = &it->second;
@@ -90,40 +90,12 @@ public:
             session.current_page--;
             session.last_action = user_name + " went to previous page";
             auto msg = buildSearchMessage(uid, session);
-            event.edit_original_response(msg);
+            event.reply(dpp::ir_update_message, msg);
         } else if (cmd == "next") {
             session.current_page++;
             session.last_action = user_name + " went to next page";
             auto msg = buildSearchMessage(uid, session);
-            event.edit_original_response(msg);
-        } else if (cmd == "play") {
-            if (ids.size() < 5) {
-                return;
-            }
-            std::string vid = ids[4];
-            session.last_action = user_name + " played";
-
-            std::string url;
-            if (session.platform == "youtube") {
-                url = "https://www.youtube.com/watch?v=" + vid;
-            } else {
-                url = "https://www.bilibili.com/video/" + vid;
-            }
-
-            auto msg = buildSearchMessage(uid, session);
-            event.edit_original_response(msg);
-
-            if (!joinVoiceChannel(event, true)) {
-                return;
-            }
-
-            event.reply("Fetching audio...");
-            auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 100);
-            if (!tool_res.success || !tool_res.data.has_value()) {
-                event.reply("Failed to fetch: " + tool_res.message);
-                return;
-            }
-            event.reply("Streaming " + tool_res.data.value());
+            event.reply(dpp::ir_update_message, msg);
         }
     }
 
@@ -142,7 +114,7 @@ public:
                 std::lock_guard<std::mutex> lock(sessions_mutex_);
                 sessions_.erase(uid);
             }
-            event.edit_original_response(dpp::message("This search interaction has expired."));
+            event.reply(dpp::ir_update_message, dpp::message("This search interaction has expired."));
             return;
         }
 
@@ -151,7 +123,7 @@ public:
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             auto it = sessions_.find(uid);
             if (it == sessions_.end()) {
-                event.reply("Search session not found.");
+                event.reply(dpp::ir_update_message, "Search session not found.");
                 return;
             }
             session_ptr = &it->second;
@@ -165,7 +137,14 @@ public:
         }
 
         std::string vid = selected_values[0];
-        session.last_action = get_user_name_from_event(event) + " selected";
+        std::string video_title;
+        for (const auto& r : session.results) {
+            if (r.bvid_or_vid == vid) {
+                video_title = r.title;
+                break;
+            }
+        }
+        session.last_action = get_user_name_from_event(event) + " played " + video_title;
 
         std::string url;
         if (session.platform == "youtube") {
@@ -174,20 +153,20 @@ public:
             url = "https://www.bilibili.com/video/" + vid;
         }
 
-        auto msg = buildSearchMessage(uid, session);
-        event.reply(dpp::ir_update_message, msg);
-
         if (!joinVoiceChannel(event, true)) {
             return;
         }
 
-        event.reply("Fetching audio...");
-        auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 100);
+        auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 70);
         if (!tool_res.success || !tool_res.data.has_value()) {
-            event.reply("Failed to fetch: " + tool_res.message);
+            session.last_action = get_user_name_from_event(event) + " play **FAILED**";
+            auto msg = buildSearchMessage(uid, session);
+            event.edit_original_response(msg);
             return;
         }
-        event.reply("Streaming " + tool_res.data.value());
+        auto msg = buildSearchMessage(uid, session);
+        // already replied by join vc, must use edit
+        event.edit_original_response(msg);
     }
 
 private:

@@ -19,10 +19,18 @@ public:
 
     virtual ~CommandBase() = default;
 
-    virtual void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
-    virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) = 0;
-    virtual void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) {}
-    virtual void select(const dpp::select_click_t &event, std::shared_ptr<dpp::cluster> bot) {}
+    virtual void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) {
+        spdlog::warn("execute not impl in this command!");
+    }
+    virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) {
+        spdlog::warn("button not impl in this command!");
+    }
+    virtual void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) {
+        spdlog::warn("form_submit not impl in this command!");
+    }
+    virtual void select(const dpp::select_click_t &event, std::shared_ptr<dpp::cluster> bot) {
+        spdlog::warn("select not impl in this command!");
+    }
 
 protected:
     static std::vector<std::string> parseButtonId(const std::string &button_id, const std::string &delimiter = "::") {
