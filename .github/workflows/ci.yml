@@ -65,6 +65,9 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
 
           # Create zip with only necessary files
+          mkdir -p build/install/scripts
+          cp scripts/watchdog.sh build/install/scripts/watchdog.sh
+          chmod +x build/install/scripts/watchdog.sh
           cd build/install
           zip -qr deploy.zip .
           ls -lh deploy.zip
@@ -79,13 +82,16 @@ jobs:
           # Kill previous instance, extract, and start new one
           for i in $(seq 1 20); do
             ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -p ${{ secrets.HOST_PORT }} ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF' && break
+              cd ~/deploys/Dash-N-Bark
+              if [ -f logs/watchdog.pid ]; then kill "$(cat logs/watchdog.pid)" 2>/dev/null || true; fi
               pkill -f Dash-N-Bark || true
               sleep 20
-              cd ~/deploys/Dash-N-Bark
               unzip -q -o deploy.zip
               rm deploy.zip
               mkdir -p logs
-              LD_LIBRARY_PATH=~/deploys/Dash-N-Bark/lib nohup ./bin/Dash-N-Bark > "logs/output_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
+              chmod +x scripts/watchdog.sh
+              nohup ./scripts/watchdog.sh > "logs/watchdog_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
+              disown
               echo "Deployment complete."
           EOF
             echo "SSH attempt $i failed, retrying..."
