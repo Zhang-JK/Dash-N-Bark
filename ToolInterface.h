@@ -16,6 +16,7 @@
 #include "Audio-Mixer/SoundPadManager.h"
 #include "Audio-Mixer/AudioMixer.h"
 #include "Audio-Mixer/RecorderSession.h"
+#include "Audio-Mixer/JoinEffectManager.h"
 #include "Stream-Fetch/FetchManager.h"
 
 
@@ -51,6 +52,18 @@ public:
     ToolInvokeResult<std::optional<std::map<int, std::string>>> listSoundpadClipsPaged(
                                 int page, int page_size, int& total_pages, const std::string& tag = "");
     ToolInvokeResult<> playSoundpadClip(int clip_id, int volume);
+    ToolInvokeResult<> playSoundpadClipByName(const std::string& clip_name, int volume);
+    [[nodiscard]] std::vector<std::pair<int, std::string>> searchSoundpadByName(
+            const std::string& query, int limit) const;
+
+    // join effect (per guild + user -> soundpad clip name)
+    ToolInvokeResult<> setJoinEffect(const std::string& guild_id, const std::string& user_id,
+                                      const std::string& clip_name);
+    ToolInvokeResult<> removeJoinEffect(const std::string& guild_id, const std::string& user_id);
+    [[nodiscard]] std::optional<std::string> getJoinEffect(const std::string& guild_id,
+                                                            const std::string& user_id) const;
+    [[nodiscard]] std::vector<std::pair<std::string, std::string>> listJoinEffects(
+            const std::string& guild_id) const;
 
     // recording
     ToolInvokeResult<> initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset = AudioMixer::VoiceChanger::VoicePreset::Baby);
@@ -67,6 +80,7 @@ private:
     std::shared_ptr<StreamFetch::FetchManager> fetch_manager_;
     std::shared_ptr<AudioMixer::AudioMixer> audio_mixer_;
     std::shared_ptr<AudioMixer::SoundPadManager> sound_pad_manager_;
+    std::shared_ptr<AudioMixer::JoinEffectManager> join_effect_manager_;
 
     std::map<std::string, std::shared_ptr<AudioMixer::RecorderSession>> recorder_sessions_;
     // todo: better change to one for each rec session

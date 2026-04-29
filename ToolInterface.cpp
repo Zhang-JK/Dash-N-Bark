@@ -19,6 +19,8 @@ ToolInterface::ToolInterface(std::string base, std::shared_ptr<exec::static_thre
     audio_mixer_ = std::make_shared<AudioMixer::AudioMixer>();
     sound_pad_manager_ = std::make_shared<AudioMixer::SoundPadManager>();
     sound_pad_manager_->initialize(base_path_ + "/soundpad.db", base_path_ + "/sounds");
+    join_effect_manager_ = std::make_shared<AudioMixer::JoinEffectManager>();
+    join_effect_manager_->initialize(base_path_ + "/join_effects.db");
     recorder_sessions_ = {};
 }
 
@@ -196,6 +198,53 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
     return {
         .success = true
     };
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClipByName(const std::string& clip_name, int volume) {
+    volume = std::clamp(volume, 1, 200);
+    auto res = sound_pad_manager_->loadAudioClip(clip_name);
+    if (!res) {
+        return {
+            .success = false,
+            .error_code = -1,
+            .message = "Clip not found: " + clip_name
+        };
+    }
+    audio_mixer_->registerAudio(res.value(), AudioMixer::AudioMixer::AUDIO_EFFECT,
+                            static_cast<float>(volume) / 100.0f);
+    return {
+        .success = true
+    };
+}
+
+std::vector<std::pair<int, std::string>> ToolInterface::searchSoundpadByName(
+        const std::string& query, int limit) const {
+    return sound_pad_manager_->searchByName(query, limit);
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::setJoinEffect(const std::string& guild_id,
+        const std::string& user_id, const std::string& clip_name) {
+    if (!sound_pad_manager_->loadAudioClip(clip_name)) {
+        return {.success = false, .error_code = -1, .message = "Soundpad clip not found: " + clip_name};
+    }
+    bool ok = join_effect_manager_->set(guild_id, user_id, clip_name);
+    return {.success = ok, .error_code = ok ? 0 : -1, .message = ok ? "" : "Failed to save join effect"};
+}
+
+ToolInterface::ToolInvokeResult<> ToolInterface::removeJoinEffect(const std::string& guild_id,
+        const std::string& user_id) {
+    bool ok = join_effect_manager_->remove(guild_id, user_id);
+    return {.success = ok, .error_code = ok ? 0 : -1, .message = ok ? "" : "Failed to remove join effect"};
+}
+
+std::optional<std::string> ToolInterface::getJoinEffect(const std::string& guild_id,
+        const std::string& user_id) const {
+    return join_effect_manager_->get(guild_id, user_id);
+}
+
+std::vector<std::pair<std::string, std::string>> ToolInterface::listJoinEffects(
+        const std::string& guild_id) const {
+    return join_effect_manager_->listForGuild(guild_id);
 }
 
 ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset) {

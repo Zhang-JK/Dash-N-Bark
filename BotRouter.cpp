@@ -4,6 +4,7 @@
 
 #include <spdlog/spdlog.h>
 #include <exec/start_detached.hpp>
+#include <exec/repeat_until.hpp>
 
 #include "BotRouter.h"
 
@@ -16,6 +17,7 @@
 #include "Commands/AddCommand.h"
 #include "Commands/ParrotCommand.h"
 #include "Commands/SearchCommand.h"
+#include "Commands/JoinEffectCommand.h"
 
 // helper function
 std::function<void(const dpp::log_t&)> spdlog_logger() {
@@ -58,6 +60,156 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     pbot_->on_button_click(this->getCmdRouterFunction<dpp::button_click_t>());
     pbot_->on_form_submit(this->getCmdRouterFunction<dpp::form_submit_t>());
     pbot_->on_select_click(this->getCmdRouterFunction<dpp::select_click_t>());
+
+    pbot_->on_autocomplete([bot = pbot_, tool = tool_](const dpp::autocomplete_t& ev) {
+        if (ev.name != "joineffect") return;
+        for (const auto& opt : ev.options) {
+            if (!opt.focused || opt.name != "clip_name") continue;
+            std::string query;
+            if (std::holds_alternative<std::string>(opt.value)) {
+                query = std::get<std::string>(opt.value);
+            }
+            constexpr int max_choices = 25; // Discord's hard limit per autocomplete reply
+            auto matches = tool->searchSoundpadByName(query, max_choices);
+            dpp::interaction_response resp(dpp::ir_autocomplete_reply);
+            for (const auto& [id, name] : matches) {
+                // Choice value is what we receive in the slash command — store the name itself.
+                resp.add_autocomplete_choice(dpp::command_option_choice(name, name));
+            }
+            bot->interaction_response_create(ev.command.id, ev.command.token, resp);
+            return;
+        }
+    });
+
+    pbot_->on_voice_client_platform([this](const dpp::voice_client_platform_t& ev) {
+        // Fires when another user's RTC is ready in a channel the bot is in.
+        // If we have a pending join effect for that user, play it 200ms later.
+        const auto user_id = ev.user_id;
+        std::string clip_name;
+        {
+            std::lock_guard<std::mutex> lg(pending_join_effects_mutex_);
+            auto it = pending_join_effects_.find(user_id);
+            if (it == pending_join_effects_.end()) return; // no pending effect, or fallback already consumed it
+            clip_name = std::move(it->second);
+            pending_join_effects_.erase(it);
+        }
+        // Defensively set send audio type — when the bot just joined to follow this user,
+        // nothing else has set it. Idempotent if already set.
+        if (ev.voice_client) {
+            ev.voice_client->set_send_audio_type(dpp::discord_voice_client::satype_live_audio);
+        }
+        spdlog::debug("Join effect: platform ready for user {}, scheduling play in 800ms", user_id.str());
+        auto stop_token = stop_src_.get_token();
+        auto timed_sched = timed_thread_context_.get_scheduler();
+        auto tool = tool_;
+        auto work = exec::schedule_after(timed_sched, std::chrono::milliseconds(1800))
+            | stdexec::then([=]() {
+                if (stop_token.stop_requested()) return;
+                auto res = tool->playSoundpadClipByName(clip_name, 100);
+                if (!res.success) {
+                    spdlog::warn("Join effect playback failed: {}", res.message);
+                }
+            })
+            | stdexec::upon_error([](auto&&) noexcept {})
+            | stdexec::upon_stopped([]() noexcept {});
+        exec::start_detached(std::move(work));
+    });
+
+    pbot_->on_voice_state_update([this](const dpp::voice_state_update_t& ev) {
+        const auto guild_id = ev.state.guild_id;
+        const auto user_id = ev.state.user_id;
+        const auto channel_id = ev.state.channel_id;
+        if (!guild_id || !user_id) return;
+        if (user_id == pbot_->me.id) return; // ignore self
+
+        // Detect channel transitions; ignore mute/deaf-only updates and leaves.
+        dpp::snowflake prev{0};
+        bool first_seen = false;
+        {
+            std::lock_guard<std::mutex> lg(last_voice_channel_mutex_);
+            auto key = std::make_pair(guild_id, user_id);
+            auto it = last_voice_channel_.find(key);
+            if (it == last_voice_channel_.end()) {
+                first_seen = true;
+            } else {
+                prev = it->second;
+            }
+            last_voice_channel_[key] = channel_id;
+        }
+        if (!channel_id) return;            // user left a channel
+        if (!first_seen && prev == channel_id) return; // not a channel change
+        // Suppress the initial snapshot Discord sends right after connect, so the
+        // bot doesn't barge in on people who were already in voice when it started.
+        if (std::chrono::steady_clock::now() - startup_time_ < std::chrono::seconds(15)) return;
+
+        auto clip = tool_->getJoinEffect(guild_id.str(), user_id.str());
+        if (!clip) return;
+
+        auto* client = ev.from();
+        if (!client) return;
+        auto* vc = client->get_voice(guild_id);
+        if (vc != nullptr) {
+            // Bot is already connected to voice in this guild.
+            // Only play the effect if the user joined the same channel the bot is in.
+            if (vc->channel_id == channel_id) {
+                spdlog::debug("Join effect: user {} joined bot's channel {}, queued for platform event",
+                                user_id.str(), channel_id.str());
+                armJoinEffect(user_id, *clip, std::chrono::seconds(5));
+            } else {
+                spdlog::debug("Join effect: user {} joined different channel {}, bot in {}, ignoring",
+                                user_id.str(), channel_id.str(), vc->channel_id.str());
+            }
+            return;
+        }
+
+        // Bot not in voice in this guild yet — follow the user into their channel.
+        // The platform event will fire after our voice client connects + receives the
+        // user's RTC info, and at that point the playback will be triggered. We arm
+        // the pending entry up-front (before the connection completes) so the platform
+        // handler can find it; fallback covers connect failure / event loss.
+        dpp::guild* g = dpp::find_guild(guild_id);
+        if (!g) return;
+        if (!g->connect_member_voice(*pbot_, user_id)) {
+            spdlog::warn("Join effect: connect_member_voice failed for user {} in guild {}",
+                            user_id.str(), guild_id.str());
+            return;
+        }
+        spdlog::debug("Join effect: connecting to user {}'s channel {}, queued for platform event",
+                        user_id.str(), channel_id.str());
+        armJoinEffect(user_id, *clip, std::chrono::seconds(10));
+    });
+}
+
+void BotRouter::armJoinEffect(dpp::snowflake user_id, std::string clip_name,
+                               std::chrono::seconds fallback) {
+    {
+        std::lock_guard<std::mutex> lg(pending_join_effects_mutex_);
+        pending_join_effects_[user_id] = clip_name;
+    }
+    auto stop_token = stop_src_.get_token();
+    auto timed_sched = timed_thread_context_.get_scheduler();
+    auto tool = tool_;
+    auto user_key = user_id;
+    auto work = exec::schedule_after(timed_sched, fallback)
+        | stdexec::then([this, user_key, tool, stop_token]() {
+            if (stop_token.stop_requested()) return;
+            std::string local_clip;
+            {
+                std::lock_guard<std::mutex> lg(pending_join_effects_mutex_);
+                auto it = pending_join_effects_.find(user_key);
+                if (it == pending_join_effects_.end()) return; // platform event already consumed it
+                local_clip = std::move(it->second);
+                pending_join_effects_.erase(it);
+            }
+            spdlog::debug("Join effect: fallback (no platform event) for user {}", user_key.str());
+            auto res = tool->playSoundpadClipByName(local_clip, 100);
+            if (!res.success) {
+                spdlog::warn("Join effect playback failed: {}", res.message);
+            }
+        })
+        | stdexec::upon_error([](auto&&) noexcept {})
+        | stdexec::upon_stopped([]() noexcept {});
+    exec::start_detached(std::move(work));
 }
 
 BotRouter::~BotRouter() {
@@ -315,6 +467,24 @@ void BotRouter::setCmds() {
                     .add_choice(dpp::command_option_choice("none", "none"))
             ),
         new ParrotCommand(tool_)
+    );
+    cmds_["joineffect"] = std::make_tuple(
+        dpp::slashcommand("joineffect", "Bind a soundpad clip to play when a user joins voice.", pbot_->me.id)
+            .add_localization("zh-CN", "进场音效", "为用户绑定加入语音频道时播放的音效。")
+            .add_option(
+                dpp::command_option(dpp::co_user, "user", "User to watch", false)
+                    .add_localization("zh-CN", "用户", "要监听的用户")
+            )
+            .add_option(
+                dpp::command_option(dpp::co_string, "clip_name", "Soundpad clip name (omit to remove binding)", false)
+                    .add_localization("zh-CN", "音效名称", "音效板片段名称 (留空则取消绑定)")
+                    .set_auto_complete(true)
+            )
+            .add_option(
+                dpp::command_option(dpp::co_boolean, "list", "List bindings in this server", false)
+                    .add_localization("zh-CN", "列表", "列出本服务器的绑定")
+            ),
+        new JoinEffectCommand(tool_)
     );
     // cmds_["tts"] = std::make_tuple(
     //     dpp::slashcommand("tts", "Text to speech.", pbot_->me.id)
