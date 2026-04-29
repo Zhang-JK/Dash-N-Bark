@@ -11,6 +11,7 @@
 #include "Commands/CommandBase.h"
 #include <stdexec/execution.hpp>
 #include <exec/static_thread_pool.hpp>
+#include <exec/timed_thread_scheduler.hpp>
 
 // for those who will be in std standard
 namespace ex = stdexec;
@@ -43,9 +44,14 @@ private:
     std::shared_ptr<ToolInterface> tool_;
 
     std::shared_ptr<exec::static_thread_pool> ppool_;
+    exec::timed_thread_context timed_thread_context_;
     std::stop_source stop_src_;
     int bg_task_cycle_ms_ = 60;
     int target_buffered_audio_ms_ = 20;
+
+    std::map<std::pair<dpp::snowflake, dpp::snowflake>, dpp::snowflake> last_voice_channel_;
+    std::mutex last_voice_channel_mutex_;
+    std::chrono::steady_clock::time_point startup_time_ = std::chrono::steady_clock::now();
 };
 
 #endif //DASH_N_BARK_BOTROUTER_H

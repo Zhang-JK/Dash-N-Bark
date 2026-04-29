@@ -39,6 +39,7 @@ namespace AudioMixer {
         [[nodiscard]] int countTags() const;
         [[nodiscard]] std::optional<std::map<int, SoundEntry>> listSounds(int page, int page_size, std::string tag) const;
         [[nodiscard]] int countSounds(const std::string& tag="") const;
+        [[nodiscard]] std::vector<std::pair<int, std::string>> searchByName(const std::string& query, int limit) const;
 
     private:
         soci::session *sql{nullptr};

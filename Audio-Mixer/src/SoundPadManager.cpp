@@ -323,4 +323,33 @@ namespace AudioMixer {
         }
     }
 
+    std::vector<std::pair<int, std::string>> SoundPadManager::searchByName(
+            const std::string& query, int limit) const {
+        std::vector<std::pair<int, std::string>> out;
+        if (!sql) return out;
+        if (limit <= 0) return out;
+        try {
+            auto consume = [&out](soci::rowset<soci::row>& rs) {
+                for (const auto& row : rs) {
+                    out.emplace_back(row.get<int>(0), row.get<std::string>(1));
+                }
+            };
+            if (query.empty()) {
+                soci::rowset<soci::row> rs = (sql->prepare
+                    << "SELECT id, name FROM sounds ORDER BY id DESC LIMIT :limit;",
+                    soci::use(limit));
+                consume(rs);
+            } else {
+                std::string like_pattern = "%" + query + "%";
+                soci::rowset<soci::row> rs = (sql->prepare
+                    << "SELECT id, name FROM sounds WHERE LOWER(name) LIKE LOWER(:q) "
+                       "ORDER BY name LIMIT :limit;",
+                    soci::use(like_pattern), soci::use(limit));
+                consume(rs);
+            }
+        } catch (const soci::soci_error& e) {
+            spdlog::error("failed to search sounds by name: {}", e.what());
+        }
+        return out;
+    }
 } // AudioMixer
