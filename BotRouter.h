@@ -36,6 +36,11 @@ public:
     template<SlashAndButtonCmd CmdType>
     void handlerExecWrapper(CommandBase* handler, const CmdType& event, std::shared_ptr<dpp::cluster> bot);
 
+    // Stash a pending join-effect entry and arm a fallback timer. The platform
+    // event handler or the fallback (whichever runs first) will play the clip.
+    void armJoinEffect(dpp::snowflake user_id, std::string clip_name,
+                       std::chrono::seconds fallback);
+
 private:
     std::string botToken_;
     std::shared_ptr<dpp::cluster> pbot_;
@@ -51,6 +56,10 @@ private:
 
     std::map<std::pair<dpp::snowflake, dpp::snowflake>, dpp::snowflake> last_voice_channel_;
     std::mutex last_voice_channel_mutex_;
+    // user_id -> clip_name. Entry is consumed by whichever fires first:
+    // on_voice_client_platform (user RTC ready) or the 5s fallback timer.
+    std::map<dpp::snowflake, std::string> pending_join_effects_;
+    std::mutex pending_join_effects_mutex_;
     std::chrono::steady_clock::time_point startup_time_ = std::chrono::steady_clock::now();
 };
 
