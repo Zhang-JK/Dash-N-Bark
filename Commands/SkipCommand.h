@@ -14,22 +14,22 @@ public:
     SkipCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             event.reply("Guild not found!");
-            return;
+            co_return;
         }
 
         auto current_song = tool_interface_->getCurrentSong();
         if (!current_song.success) {
             event.reply("No song is currently playing!");
-            return;
+            co_return;
         }
 
         if (!tool_interface_->skipCurrentSong().success) {
             event.reply("Play list is empty");
-            return;
+            co_return;
         }
 
         auto next_song = tool_interface_->getCurrentSong();
@@ -39,10 +39,7 @@ public:
             event.reply("**Skipped** " + std::get<0>(*current_song.data) +
                         "\n**Now playing** " + std::get<0>(*next_song.data));
         }
-    }
-
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        // No button interaction for this command
+        co_return;
     }
 };
 

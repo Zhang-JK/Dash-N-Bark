@@ -14,27 +14,22 @@ public:
     LeaveCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             event.reply("Guild not found!");
-            return;
+            co_return;
         }
 
-        // Check if bot is in a voice channel
         auto voice_conn = event.from()->get_voice(event.command.guild_id);
         if (!voice_conn) {
             event.reply("I'm not in a voice channel!");
-            return;
+            co_return;
         }
 
-        // Disconnect from voice channel
         event.from()->disconnect_voice(event.command.guild_id);
         event.reply("Left the voice channel!");
-    }
-
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        // No button interaction for this command
+        co_return;
     }
 };
 

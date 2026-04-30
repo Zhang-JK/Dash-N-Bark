@@ -8,6 +8,11 @@
 
 #include <dpp/dpp.h>
 #include <spdlog/spdlog.h>
+#include <stdexec/execution.hpp>
+#include <exec/static_thread_pool.hpp>
+#include <exec/timed_thread_scheduler.hpp>
+#include <exec/start_detached.hpp>
+#include <exec/task.hpp>
 #include "../ToolInterface.h"
 
 class CommandBase {
@@ -19,17 +24,21 @@ public:
 
     virtual ~CommandBase() = default;
 
-    virtual void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) {
+    virtual exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) {
         spdlog::warn("execute not impl in this command!");
+        co_return;
     }
-    virtual void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) {
+    virtual exec::task<void> button(dpp::button_click_t event, std::shared_ptr<dpp::cluster> bot) {
         spdlog::warn("button not impl in this command!");
+        co_return;
     }
-    virtual void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) {
+    virtual exec::task<void> form_submit(dpp::form_submit_t event, std::shared_ptr<dpp::cluster> bot) {
         spdlog::warn("form_submit not impl in this command!");
+        co_return;
     }
-    virtual void select(const dpp::select_click_t &event, std::shared_ptr<dpp::cluster> bot) {
+    virtual exec::task<void> select(dpp::select_click_t event, std::shared_ptr<dpp::cluster> bot) {
         spdlog::warn("select not impl in this command!");
+        co_return;
     }
 
 protected:
@@ -51,14 +60,17 @@ protected:
         return parts;
     }
 
-    static bool joinVoiceChannel(const dpp::interaction_create_t &event, bool is_button = false) {
+    // Coroutine: poll for voice readiness on the timed scheduler, hopping back
+    // to the pool after every wait so heavy work never lands on the timed
+    // thread. Caller is already on a pool worker (handlerExecWrapper schedules
+    // every command body via starts_on(pool_sched, ...)).
+    exec::task<bool> joinVoiceChannel(dpp::interaction_create_t event, bool is_button = false) {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             spdlog::error("Guild not found for guild ID: {}", event.command.guild_id);
-            return false;
+            co_return false;
         }
 
-        // Send deferred response to prevent Discord interaction timeout
         if (is_button) {
             event.reply(dpp::ir_deferred_update_message, "");
         } else {
@@ -69,25 +81,26 @@ protected:
         if (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready()) {
             if (!g->connect_member_voice(*event.owner, event.command.get_issuing_user().id)) {
                 event.edit_original_response(dpp::message("You don't seem to be in a voice channel!"));
-                return false;
+                co_return false;
             }
-            // wait for ready
             auto start = std::chrono::steady_clock::now();
             const auto timeout = std::chrono::milliseconds(3000);
+            auto timed_sched = tool_interface_->getTimedScheduler();
+            auto pool_sched = tool_interface_->getPoolScheduler();
             do {
                 vc_bot = event.from()->get_voice(event.command.guild_id);
                 if (std::chrono::steady_clock::now() - start > timeout) {
                     event.edit_original_response(dpp::message("Timeout waiting for voice client to become ready."));
-                    return false;
+                    co_return false;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                co_await (exec::schedule_after(timed_sched, std::chrono::milliseconds(100))
+                          | stdexec::continues_on(pool_sched));
             } while (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready());
         }
         vc_bot->voiceclient->set_send_audio_type(dpp::discord_voice_client::satype_live_audio);
-        return true;
+        co_return true;
     }
 
-    // utils
     static auto random_gen_id(int len=4) -> std::string {
         static constexpr  char chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
         thread_local static std::mt19937_64 rng(std::random_device{}());
@@ -97,13 +110,11 @@ protected:
         return s;
     }
 
-    // utils
     static auto get_user_name_from_event(const dpp::interaction_create_t &event) -> std::string {
         return event.command.member.get_nickname().empty()
                     ? event.command.usr.username
                     : event.command.member.get_nickname();
     }
-
 
     std::shared_ptr<ToolInterface> tool_interface_;
 };

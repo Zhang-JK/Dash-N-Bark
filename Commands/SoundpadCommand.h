@@ -281,7 +281,7 @@ public:
     SoundpadCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto use_tag = std::holds_alternative<bool>(event.get_parameter("by_tag"))
                 ? std::get<bool>(event.get_parameter("by_tag")) : false;
 
@@ -294,7 +294,7 @@ public:
         }
         if (!res.success || !res.data.has_value() || local_total_pages == 0) {
             event.reply("Soundpad empty or unavailable.");
-            return;
+            co_return;
         }
 
         std::string uid;
@@ -316,13 +316,14 @@ public:
         }
 
         event.reply(msg);
+        co_return;
     }
 
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> button(dpp::button_click_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto ids = parseButtonId(event.custom_id);
         if (ids.size() != 5 || ids[0] != "soundpad") {
             event.reply("Invalid button ID for soundpad");
-            return;
+            co_return;
         }
         auto recv_ts = std::stoll(ids[3]);
         auto now_ts = std::time(nullptr);
@@ -334,7 +335,55 @@ public:
             event.reply(dpp::ir_update_message, "This soundpad interaction has expired.");
             std::lock_guard<std::mutex> lg(sessions_mutex_);
             sessions_.erase(uid);
-            return;
+            co_return;
+        }
+
+        // play branch needs to await joinVoiceChannel — handle without holding mutex across co_await.
+        if (cmd == "play") {
+            int clip_id;
+            try {
+                clip_id = std::stoi(cmd_param);
+            } catch (...) {
+                event.reply(dpp::ir_update_message, "Invalid clip ID.");
+                co_return;
+            }
+            int vol = 100;
+            bool is_tag = false;
+            std::string clip_name;
+            dpp::message msg;
+            {
+                std::unique_lock<std::mutex> lock(sessions_mutex_);
+                auto it = sessions_.find(uid);
+                if (it == sessions_.end()) {
+                    lock.unlock();
+                    event.reply(dpp::ir_update_message, "This soundpad interaction is no longer valid.");
+                    co_return;
+                }
+                SoundpadSession& session = it->second;
+                if (session.mappings.find(clip_id) == session.mappings.end()) {
+                    lock.unlock();
+                    event.reply(dpp::ir_update_message, "Clip not found.");
+                    co_return;
+                }
+                vol = session.volume;
+                is_tag = session.pagination.by_tag;
+                clip_name = session.mappings.at(clip_id);
+                session.last_action = get_user_name_from_event(event) + " played " + clip_name;
+                msg = build_soundpad_message(event.command.channel_id, session, uid,
+                                                      build_status_line(session), is_tag);
+            }
+
+            if (!co_await joinVoiceChannel(event, true)) {
+                co_return;
+            }
+            auto res = tool_interface_->playSoundpadClip(clip_id, vol);
+            if (!res.success) {
+                event.edit_original_response(dpp::message(
+                    "Failed to play clip ID: " + std::to_string(clip_id)));
+                co_return;
+            }
+            event.edit_original_response(msg);
+            co_return;
         }
 
         std::unique_lock<std::mutex> lock(sessions_mutex_);
@@ -342,7 +391,7 @@ public:
         if (it == sessions_.end()) {
             lock.unlock();
             event.reply(dpp::ir_update_message, "This soundpad interaction is no longer valid.");
-            return;
+            co_return;
         }
         SoundpadSession& session = it->second;
 
@@ -385,38 +434,6 @@ public:
                     .set_text_style(dpp::text_short)
             );
             event.dialog(modal);
-        } else if (cmd == "play") {
-            int clip_id;
-            try {
-                clip_id = std::stoi(cmd_param);
-            } catch (...) {
-                lock.unlock();
-                event.reply(dpp::ir_update_message, "Invalid clip ID.");
-                return;
-            }
-            if (session.mappings.find(clip_id) == session.mappings.end()) {
-                lock.unlock();
-                event.reply(dpp::ir_update_message, "Clip not found.");
-                return;
-            }
-            int vol = session.volume;
-            bool is_tag = session.pagination.by_tag;
-            std::string clip_name = session.mappings.at(clip_id);
-            session.last_action = get_user_name_from_event(event) + " played " + clip_name;
-            auto msg = build_soundpad_message(event.command.channel_id, session, uid,
-                                                      build_status_line(session), is_tag);
-            lock.unlock();
-
-            if (!joinVoiceChannel(event, true)) {
-                return;
-            }
-            auto res = tool_interface_->playSoundpadClip(clip_id, vol);
-            if (!res.success) {
-                event.edit_original_response(dpp::message(
-                    "Failed to play clip ID: " + std::to_string(clip_id)));
-                return;
-            }
-            event.edit_original_response(msg);
         } else if (cmd == "tag") {
             session.pagination.current_page = 0;
             session.pagination.tag = cmd_param;
@@ -426,47 +443,46 @@ public:
             lock.unlock();
             event.reply(dpp::ir_update_message, "Unknown command");
         }
+        co_return;
     }
 
-    void form_submit(const dpp::form_submit_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> form_submit(dpp::form_submit_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto ids = parseButtonId(event.custom_id);
         if (ids.size() != 4 || ids[0] != "soundpad" || ids[1] != "jump_modal") {
             event.reply("Invalid form submit for soundpad");
-            return;
+            co_return;
         }
         auto recv_ts = std::stoll(ids[2]);
         auto now_ts = std::time(nullptr);
         const std::string& uid = ids[3];
 
-        // Acknowledge the modal: we will update the original component message
         event.reply(dpp::ir_deferred_update_message, "");
 
         if (now_ts - recv_ts > SESSION_EXPIRE_SECS) {
             event.edit_original_response(dpp::message("This soundpad interaction has expired."));
             std::lock_guard<std::mutex> lg(sessions_mutex_);
             sessions_.erase(uid);
-            return;
+            co_return;
         }
 
-        // Extract the page number from the modal
         std::string input;
         if (event.components.empty() || event.components[0].custom_id != JUMP_PAGE_COMPONENT_ID) {
             event.edit_original_response(dpp::message("Failed to read page number."));
-            return;
+            co_return;
         }
         try {
             input = std::get<std::string>(event.components[0].value);
         } catch (...) {
             event.edit_original_response(dpp::message("Failed to read page number."));
-            return;
+            co_return;
         }
 
         int requested_page;
         try {
-            requested_page = std::stoi(input) - 1; // Convert to 0-indexed
+            requested_page = std::stoi(input) - 1;
         } catch (...) {
             event.edit_original_response(dpp::message("Invalid page number: \"" + input + "\""));
-            return;
+            co_return;
         }
 
         std::unique_lock<std::mutex> lock(sessions_mutex_);
@@ -474,15 +490,15 @@ public:
         if (it == sessions_.end()) {
             lock.unlock();
             event.edit_original_response(dpp::message("This soundpad interaction is no longer valid."));
-            return;
+            co_return;
         }
         SoundpadSession& session = it->second;
 
-        // Clamp to valid range
         requested_page = std::max(0, std::min(session.pagination.total_pages - 1, requested_page));
         session.pagination.current_page = requested_page;
 
         update_page_edit_response(event, session, uid);
+        co_return;
     }
 
 };

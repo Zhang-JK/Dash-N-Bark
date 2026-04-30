@@ -20,7 +20,7 @@ public:
     explicit SearchCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto platform = std::get<std::string>(event.get_parameter("platform"));
         auto keyword = std::get<std::string>(event.get_parameter("keyword"));
         spdlog::debug("Search command received keyword: {} on platform: {}", keyword, platform);
@@ -31,7 +31,7 @@ public:
         auto results = tool_interface_->searchByPlatform(keyword, platform, max_results);
         if (results.empty()) {
             event.edit_original_response(dpp::message("No search results found for \"" + keyword + "\" on " + platform));
-            return;
+            co_return;
         }
 
         std::string uid = random_gen_id();
@@ -50,12 +50,13 @@ public:
 
         auto msg = buildSearchMessage(uid, sessions_[uid]);
         event.edit_original_response(msg);
+        co_return;
     }
 
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> button(dpp::button_click_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto ids = parseButtonId(event.custom_id);
         if (ids.empty() || ids[0] != "search" || ids.size() < 4) {
-            return;
+            co_return;
         }
 
         const std::string& cmd = ids[1];
@@ -69,7 +70,7 @@ public:
                 sessions_.erase(uid);
             }
             event.reply(dpp::ir_update_message, dpp::message("This search interaction has expired."));
-            return;
+            co_return;
         }
 
         Session* session_ptr = nullptr;
@@ -78,7 +79,7 @@ public:
             auto it = sessions_.find(uid);
             if (it == sessions_.end()) {
                 event.reply(dpp::ir_update_message, dpp::message("Search session not found."));
-                return;
+                co_return;
             }
             session_ptr = &it->second;
         }
@@ -108,12 +109,13 @@ public:
             auto msg = buildSearchMessage(uid, session);
             event.reply(dpp::ir_update_message, msg);
         }
+        co_return;
     }
 
-    void select(const dpp::select_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> select(dpp::select_click_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto ids = parseButtonId(event.custom_id);
         if (ids.size() < 4 || ids[0] != "search" || ids[1] != "select") {
-            return;
+            co_return;
         }
 
         auto recv_ts = std::stoll(ids[2]);
@@ -126,7 +128,7 @@ public:
                 sessions_.erase(uid);
             }
             event.reply(dpp::ir_update_message, dpp::message("This search interaction has expired."));
-            return;
+            co_return;
         }
 
         Session* session_ptr = nullptr;
@@ -135,7 +137,7 @@ public:
             auto it = sessions_.find(uid);
             if (it == sessions_.end()) {
                 event.reply(dpp::ir_update_message, "Search session not found.");
-                return;
+                co_return;
             }
             session_ptr = &it->second;
         }
@@ -144,7 +146,7 @@ public:
         auto selected_values = event.values;
 
         if (selected_values.empty()) {
-            return;
+            co_return;
         }
 
         std::string vid = selected_values[0];
@@ -164,8 +166,8 @@ public:
             url = "https://www.bilibili.com/video/" + vid;
         }
 
-        if (!joinVoiceChannel(event, true)) {
-            return;
+        if (!co_await joinVoiceChannel(event, true)) {
+            co_return;
         }
 
         auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 70);
@@ -173,11 +175,11 @@ public:
             session.last_action = get_user_name_from_event(event) + " play **FAILED**";
             auto msg = buildSearchMessage(uid, session);
             event.edit_original_response(msg);
-            return;
+            co_return;
         }
         auto msg = buildSearchMessage(uid, session);
-        // already replied by join vc, must use edit
         event.edit_original_response(msg);
+        co_return;
     }
 
 private:

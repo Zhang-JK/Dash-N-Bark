@@ -14,23 +14,19 @@ public:
     JoinCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             event.reply("Guild not found!");
-            return;
+            co_return;
         }
 
-        if (!joinVoiceChannel(event)) {
-            return;
+        if (!co_await joinVoiceChannel(event)) {
+            co_return;
         }
         event.edit_original_response(dpp::message("Joined your voice channel!"));
+        co_return;
     }
-
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        // No button interaction for this command
-    }
-
 };
 
 

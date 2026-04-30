@@ -14,7 +14,7 @@ public:
     JoinEffectCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         const std::string guild_id = event.command.guild_id.str();
 
         bool list = std::holds_alternative<bool>(event.get_parameter("list"))
@@ -23,20 +23,20 @@ public:
             auto bindings = tool_interface_->listJoinEffects(guild_id);
             if (bindings.empty()) {
                 event.reply("No join effects bound in this server.");
-                return;
+                co_return;
             }
             std::string out = "Join effects in this server:\n";
             for (const auto& [uid, clip] : bindings) {
                 out += "<@" + uid + "> -> " + clip + "\n";
             }
             event.reply(out);
-            return;
+            co_return;
         }
 
         auto user_param = event.get_parameter("user");
         if (!std::holds_alternative<dpp::snowflake>(user_param)) {
             event.reply("Missing required `user` option.");
-            return;
+            co_return;
         }
         const std::string user_id = std::get<dpp::snowflake>(user_param).str();
 
@@ -49,15 +49,16 @@ public:
             event.reply(res.success
                 ? std::string("Removed join effect for <@") + user_id + ">."
                 : std::string("Failed to remove join effect: ") + res.message);
-            return;
+            co_return;
         }
 
         auto res = tool_interface_->setJoinEffect(guild_id, user_id, clip_name);
         if (!res.success) {
             event.reply(std::string("Failed to set join effect: ") + res.message);
-            return;
+            co_return;
         }
         event.reply("Bound join effect: <@" + user_id + "> -> `" + clip_name + "`.");
+        co_return;
     }
 };
 

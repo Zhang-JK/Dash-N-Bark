@@ -14,11 +14,11 @@ public:
     StreamCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             event.reply("Guild not found!");
-            return;
+            co_return;
         }
 
         auto url = std::get<std::string>(event.get_parameter("url"));
@@ -28,8 +28,8 @@ public:
         }
         spdlog::debug("Got user requested url {} volume {}", url.c_str(), volume);
 
-        if (!joinVoiceChannel(event)) {
-            return;
+        if (!co_await joinVoiceChannel(event)) {
+            co_return;
         }
 
         event.edit_original_response(dpp::message("Fetching sound from URL..."));
@@ -37,14 +37,11 @@ public:
         if (!tool_res.success || !tool_res.data.has_value()) {
             event.edit_original_response(dpp::message("Failed to fetch with error code " +
                         std::to_string(tool_res.error_code) + ": " + tool_res.message));
-            return;
+            co_return;
         }
 
         event.edit_original_response(dpp::message("Streaming " + tool_res.data.value()));
-    }
-
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        // No button interaction for this command
+        co_return;
     }
 };
 
