@@ -218,8 +218,16 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
                 auto clip = tool->getJoinEffect(guild_id.str(), user_id.str());
                 if (!clip) return;
 
-                auto* vc = client->get_voice(guild_id);
-                if (vc != nullptr) {
+                auto* raw_vc = client->get_voice(guild_id);
+                std::shared_ptr<dpp::voiceconn> vc;
+                if (raw_vc) {
+                    try {
+                        vc = raw_vc->shared_from_this();
+                    } catch (const std::bad_weak_ptr&) {
+                        vc.reset();
+                    }
+                }
+                if (vc) {
                     if (vc->channel_id == channel_id) {
                         spdlog::debug("Join effect: user {} joined bot's channel {}, queued for platform event",
                                         user_id.str(), channel_id.str());
@@ -390,7 +398,20 @@ void BotRouter::startBgTask() {
                     try {
                         std::lock_guard<std::mutex> lg(state->client_mutex);
                         if (state->client && state->serving_guild_id) {
-                            auto local_voice_conn = state->client->get_voice(state->serving_guild_id.value());
+                            // Pin voiceconn before any work — get_voice returns
+                            // a raw ptr whose owning shared_ptr can be erased by
+                            // disconnect_voice_internal on the gateway thread at
+                            // any moment. shared_from_this() keeps both the
+                            // voiceconn and its unique_ptr<voiceclient> alive
+                            // for the duration of this scope.
+                            std::shared_ptr<dpp::voiceconn> local_voice_conn;
+                            if (auto* raw = state->client->get_voice(state->serving_guild_id.value())) {
+                                try {
+                                    local_voice_conn = raw->shared_from_this();
+                                } catch (const std::bad_weak_ptr&) {
+                                    local_voice_conn.reset();
+                                }
+                            }
                             auto audio = tool_->stepAudioMixer(step_size);
                             if (local_voice_conn && audio) {
                                 state->idle_count = 0;

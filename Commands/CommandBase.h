@@ -77,7 +77,22 @@ protected:
             event.thinking();
         }
 
-        dpp::voiceconn* vc_bot = event.from()->get_voice(event.command.guild_id);
+        // Helper: re-resolve voiceconn and pin via shared_from_this so the
+        // unique_ptr<discord_voice_client> can't be freed while we touch it.
+        // get_voice returns a raw ptr whose owning shared_ptr lives in
+        // discord_client::connecting_voice_channels and can be erased by
+        // disconnect_voice_internal at any moment on the gateway thread.
+        auto pin_vc = [&]() -> std::shared_ptr<dpp::voiceconn> {
+            auto* raw = event.from()->get_voice(event.command.guild_id);
+            if (!raw) return nullptr;
+            try {
+                return raw->shared_from_this();
+            } catch (const std::bad_weak_ptr&) {
+                return nullptr;
+            }
+        };
+
+        std::shared_ptr<dpp::voiceconn> vc_bot = pin_vc();
         if (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready()) {
             if (!g->connect_member_voice(*event.owner, event.command.get_issuing_user().id)) {
                 event.edit_original_response(dpp::message("You don't seem to be in a voice channel!"));
@@ -88,14 +103,21 @@ protected:
             auto timed_sched = tool_interface_->getTimedScheduler();
             auto pool_sched = tool_interface_->getPoolScheduler();
             do {
-                vc_bot = event.from()->get_voice(event.command.guild_id);
+                vc_bot = pin_vc();
                 if (std::chrono::steady_clock::now() - start > timeout) {
                     event.edit_original_response(dpp::message("Timeout waiting for voice client to become ready."));
                     co_return false;
                 }
                 co_await (exec::schedule_after(timed_sched, std::chrono::milliseconds(100))
                           | stdexec::continues_on(pool_sched));
+                // After resuming, the voiceconn we pinned before the await may
+                // have been replaced; re-pin so the readiness check below sees
+                // the current state, not a stale shared_ptr.
+                vc_bot = pin_vc();
             } while (!vc_bot || !vc_bot->voiceclient || !vc_bot->voiceclient->is_ready());
+        }
+        if (!vc_bot || !vc_bot->voiceclient) {
+            co_return false;
         }
         vc_bot->voiceclient->set_send_audio_type(dpp::discord_voice_client::satype_live_audio);
         co_return true;
