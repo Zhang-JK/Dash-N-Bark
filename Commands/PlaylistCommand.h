@@ -14,17 +14,17 @@ public:
     PlaylistCommand(std::shared_ptr<ToolInterface> tool_interface)
         : CommandBase(std::move(tool_interface)) {}
 
-    void execute(const dpp::slashcommand_t &event, std::shared_ptr<dpp::cluster> bot) override {
+    exec::task<void> execute(dpp::slashcommand_t event, std::shared_ptr<dpp::cluster> bot) override {
         dpp::guild *g = dpp::find_guild(event.command.guild_id);
         if (!g) {
             event.reply("Guild not found!");
-            return;
+            co_return;
         }
 
         auto playlist = tool_interface_->getPlaylist().data;
         if (!playlist.has_value()) {
             event.reply("The playlist is currently empty.");
-            return;
+            co_return;
         }
         auto &pl = playlist.value();
         std::string out;
@@ -45,18 +45,12 @@ public:
             if (i == 0 && played > 0) {
                 std::string playedStr = formatTime(played);
                 out += "▶️ **" + std::to_string(i + 1) + ". " + name + " — " + playedStr + " / " + totalStr + "**\n";
-                // if (pl.size() > 1) {
-                //     out += "────────────────\n";
-                // }
             } else {
                 out += "▫️ " + std::to_string(i + 1) + ". " + name + " — " + totalStr + "\n";
             }
         }
         event.reply(out);
-    }
-
-    void button(const dpp::button_click_t &event, std::shared_ptr<dpp::cluster> bot) override {
-        // No button interaction for this command
+        co_return;
     }
 };
 

@@ -73,6 +73,11 @@ public:
     std::vector<StreamFetch::FetchManager::SearchResult> search(const std::string& keyword, int max_results = 10);
     std::vector<StreamFetch::FetchManager::SearchResult> searchByPlatform(const std::string& keyword, const std::string& platform, int max_results = 10);
 
+    // scheduler accessors so callers can post stdexec work onto the shared pool / timed context.
+    [[nodiscard]] auto getPoolScheduler() const { return ppool_->get_scheduler(); }
+    [[nodiscard]] auto getTimedScheduler() { return timed_thread_context_.get_scheduler(); }
+    [[nodiscard]] std::shared_ptr<exec::static_thread_pool> getPool() const { return ppool_; }
+
 private:
     std::string base_path_;
     std::shared_ptr<exec::static_thread_pool> ppool_;

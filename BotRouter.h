@@ -5,6 +5,7 @@
 #ifndef DASH_N_BARK_BOTROUTER_H
 #define DASH_N_BARK_BOTROUTER_H
 
+#include <atomic>
 #include <dpp/dpp.h>
 
 #include "ToolInterface.h"
@@ -60,6 +61,10 @@ private:
     // on_voice_client_platform (user RTC ready) or the 5s fallback timer.
     std::map<dpp::snowflake, std::string> pending_join_effects_;
     std::mutex pending_join_effects_mutex_;
+    // Bounded counter for in-flight voice_receive packets. If too many packets
+    // are queued onto the pool faster than RecorderSession can consume them,
+    // we drop newer ones rather than let the queue grow unbounded.
+    std::atomic<int> voice_recv_inflight_{0};
     std::chrono::steady_clock::time_point startup_time_ = std::chrono::steady_clock::now();
 };
 

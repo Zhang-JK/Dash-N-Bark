@@ -5,6 +5,7 @@
 #include <spdlog/spdlog.h>
 #include <exec/start_detached.hpp>
 #include <exec/repeat_until.hpp>
+#include <exec/task.hpp>
 
 #include "BotRouter.h"
 
@@ -19,7 +20,59 @@
 #include "Commands/SearchCommand.h"
 #include "Commands/JoinEffectCommand.h"
 
-// helper function
+namespace {
+    // ---- timing / sizing constants ----------------------------------------
+    // Delay between a remote user's RTC becoming ready and playing their join
+    // effect. Gives the platform a moment to settle before audio is mixed in.
+    constexpr auto JOIN_EFFECT_PLATFORM_DELAY = std::chrono::milliseconds(1800);
+    // Suppress join-effect handling for this long after startup so the
+    // initial Discord voice-state snapshot doesn't trigger barge-ins.
+    constexpr auto STARTUP_VOICE_SUPPRESSION = std::chrono::seconds(15);
+    // Discord global command create rate-limit safety gap.
+    constexpr auto CMD_REGISTER_INTERVAL = std::chrono::seconds(1);
+    // Destructor wait loop tuning.
+    constexpr auto SHUTDOWN_WAIT_TIMEOUT = std::chrono::seconds(120);
+    constexpr auto SHUTDOWN_WAIT_POLL = std::chrono::milliseconds(2000);
+    // Soft cap on outstanding voice_receive jobs queued onto the pool.
+    // ~32 packets ≈ 640ms of audio at 20ms-per-packet cadence; if the
+    // recorder can't drain that fast, we drop excess to bound memory.
+    constexpr int MAX_VOICE_RECV_INFLIGHT = 32;
+
+    // Append the canonical error / stopped tail to a sender. Replaces the
+    // previous noexcept-with-try-catch pattern: exceptions thrown inside a
+    // then() now propagate through the sender's error channel and land here,
+    // where the context tag gets logged. start_detached then completes
+    // cleanly, so no std::terminate.
+    template<typename Sender>
+    auto withErrorLog(Sender&& s, const char* context) {
+        return std::forward<Sender>(s)
+            | stdexec::upon_error([context](auto&& err) noexcept {
+                using E = std::decay_t<decltype(err)>;
+                if constexpr (std::is_same_v<E, std::exception_ptr>) {
+                    try { std::rethrow_exception(err); }
+                    catch (const std::exception& e) {
+                        spdlog::error("[{}] sender error: {}", context, e.what());
+                    } catch (...) {
+                        spdlog::error("[{}] sender error: unknown", context);
+                    }
+                } else {
+                    spdlog::error("[{}] sender error channel triggered", context);
+                }
+            })
+            | stdexec::upon_stopped([]() noexcept {});
+    }
+
+    // Schedule a coroutine onto the given pool and detach. Used by every
+    // handlerExecWrapper specialization to launch command coroutines.
+    template<typename Sender>
+    void launchHandlerOnPool(std::shared_ptr<exec::static_thread_pool> pool, Sender&& s) {
+        auto sched = pool->get_scheduler();
+        auto work = withErrorLog(stdexec::starts_on(sched, std::forward<Sender>(s)),
+                                 "command coroutine");
+        exec::start_detached(std::move(work));
+    }
+}
+
 std::function<void(const dpp::log_t&)> spdlog_logger() {
     return [](const dpp::log_t& event) {
         if (event.severity > dpp::ll_trace) {
@@ -61,24 +114,31 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     pbot_->on_form_submit(this->getCmdRouterFunction<dpp::form_submit_t>());
     pbot_->on_select_click(this->getCmdRouterFunction<dpp::select_click_t>());
 
-    pbot_->on_autocomplete([bot = pbot_, tool = tool_](const dpp::autocomplete_t& ev) {
+    pbot_->on_autocomplete([this, bot = pbot_, tool = tool_](const dpp::autocomplete_t& ev) {
         if (ev.name != "joineffect") return;
-        for (const auto& opt : ev.options) {
-            if (!opt.focused || opt.name != "clip_name") continue;
-            std::string query;
-            if (std::holds_alternative<std::string>(opt.value)) {
-                query = std::get<std::string>(opt.value);
-            }
-            constexpr int max_choices = 25; // Discord's hard limit per autocomplete reply
-            auto matches = tool->searchSoundpadByName(query, max_choices);
-            dpp::interaction_response resp(dpp::ir_autocomplete_reply);
-            for (const auto& [id, name] : matches) {
-                // Choice value is what we receive in the slash command — store the name itself.
-                resp.add_autocomplete_choice(dpp::command_option_choice(name, name));
-            }
-            bot->interaction_response_create(ev.command.id, ev.command.token, resp);
-            return;
-        }
+        auto sched = ppool_->get_scheduler();
+        auto pool_keepalive = ppool_;
+        auto work = withErrorLog(
+            stdexec::schedule(sched)
+            | stdexec::then([ev, bot, tool, pool_keepalive]() {
+                for (const auto& opt : ev.options) {
+                    if (!opt.focused || opt.name != "clip_name") continue;
+                    std::string query;
+                    if (std::holds_alternative<std::string>(opt.value)) {
+                        query = std::get<std::string>(opt.value);
+                    }
+                    constexpr int max_choices = 25;
+                    auto matches = tool->searchSoundpadByName(query, max_choices);
+                    dpp::interaction_response resp(dpp::ir_autocomplete_reply);
+                    for (const auto& [id, name] : matches) {
+                        resp.add_autocomplete_choice(dpp::command_option_choice(name, name));
+                    }
+                    bot->interaction_response_create(ev.command.id, ev.command.token, resp);
+                    return;
+                }
+            }),
+            "autocomplete");
+        exec::start_detached(std::move(work));
     });
 
     pbot_->on_voice_client_platform([this](const dpp::voice_client_platform_t& ev) {
@@ -101,17 +161,19 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
         spdlog::debug("Join effect: platform ready for user {}, scheduling play in 800ms", user_id.str());
         auto stop_token = stop_src_.get_token();
         auto timed_sched = timed_thread_context_.get_scheduler();
+        auto pool_sched = ppool_->get_scheduler();
         auto tool = tool_;
-        auto work = exec::schedule_after(timed_sched, std::chrono::milliseconds(1800))
+        auto work = withErrorLog(
+            exec::schedule_after(timed_sched, JOIN_EFFECT_PLATFORM_DELAY)
+            | stdexec::continues_on(pool_sched)
             | stdexec::then([=]() {
                 if (stop_token.stop_requested()) return;
                 auto res = tool->playSoundpadClipByName(clip_name, 100);
                 if (!res.success) {
                     spdlog::warn("Join effect playback failed: {}", res.message);
                 }
-            })
-            | stdexec::upon_error([](auto&&) noexcept {})
-            | stdexec::upon_stopped([]() noexcept {});
+            }),
+            "join effect platform");
         exec::start_detached(std::move(work));
     });
 
@@ -140,43 +202,48 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
         if (!first_seen && prev == channel_id) return; // not a channel change
         // Suppress the initial snapshot Discord sends right after connect, so the
         // bot doesn't barge in on people who were already in voice when it started.
-        if (std::chrono::steady_clock::now() - startup_time_ < std::chrono::seconds(15)) return;
-
-        auto clip = tool_->getJoinEffect(guild_id.str(), user_id.str());
-        if (!clip) return;
+        if (std::chrono::steady_clock::now() - startup_time_ < STARTUP_VOICE_SUPPRESSION) return;
 
         auto* client = ev.from();
         if (!client) return;
-        auto* vc = client->get_voice(guild_id);
-        if (vc != nullptr) {
-            // Bot is already connected to voice in this guild.
-            // Only play the effect if the user joined the same channel the bot is in.
-            if (vc->channel_id == channel_id) {
-                spdlog::debug("Join effect: user {} joined bot's channel {}, queued for platform event",
-                                user_id.str(), channel_id.str());
-                armJoinEffect(user_id, *clip, std::chrono::seconds(5));
-            } else {
-                spdlog::debug("Join effect: user {} joined different channel {}, bot in {}, ignoring",
-                                user_id.str(), channel_id.str(), vc->channel_id.str());
-            }
-            return;
-        }
 
-        // Bot not in voice in this guild yet — follow the user into their channel.
-        // The platform event will fire after our voice client connects + receives the
-        // user's RTC info, and at that point the playback will be triggered. We arm
-        // the pending entry up-front (before the connection completes) so the platform
-        // handler can find it; fallback covers connect failure / event loss.
-        dpp::guild* g = dpp::find_guild(guild_id);
-        if (!g) return;
-        if (!g->connect_member_voice(*pbot_, user_id)) {
-            spdlog::warn("Join effect: connect_member_voice failed for user {} in guild {}",
-                            user_id.str(), guild_id.str());
-            return;
-        }
-        spdlog::debug("Join effect: connecting to user {}'s channel {}, queued for platform event",
-                        user_id.str(), channel_id.str());
-        armJoinEffect(user_id, *clip, std::chrono::seconds(10));
+        // Move the DB read + voice connect off the DPP event-loop thread.
+        auto sched = ppool_->get_scheduler();
+        auto pool_keepalive = ppool_;
+        auto tool = tool_;
+        auto self_bot = pbot_;
+        auto work = withErrorLog(
+            stdexec::schedule(sched)
+            | stdexec::then([this, guild_id, user_id, channel_id, client, tool, self_bot, pool_keepalive]() {
+                auto clip = tool->getJoinEffect(guild_id.str(), user_id.str());
+                if (!clip) return;
+
+                auto* vc = client->get_voice(guild_id);
+                if (vc != nullptr) {
+                    if (vc->channel_id == channel_id) {
+                        spdlog::debug("Join effect: user {} joined bot's channel {}, queued for platform event",
+                                        user_id.str(), channel_id.str());
+                        armJoinEffect(user_id, *clip, std::chrono::seconds(5));
+                    } else {
+                        spdlog::debug("Join effect: user {} joined different channel {}, bot in {}, ignoring",
+                                        user_id.str(), channel_id.str(), vc->channel_id.str());
+                    }
+                    return;
+                }
+
+                dpp::guild* g = dpp::find_guild(guild_id);
+                if (!g) return;
+                if (!g->connect_member_voice(*self_bot, user_id)) {
+                    spdlog::warn("Join effect: connect_member_voice failed for user {} in guild {}",
+                                    user_id.str(), guild_id.str());
+                    return;
+                }
+                spdlog::debug("Join effect: connecting to user {}'s channel {}, queued for platform event",
+                                user_id.str(), channel_id.str());
+                armJoinEffect(user_id, *clip, std::chrono::seconds(10));
+            }),
+            "voice_state_update");
+        exec::start_detached(std::move(work));
     });
 }
 
@@ -188,9 +255,12 @@ void BotRouter::armJoinEffect(dpp::snowflake user_id, std::string clip_name,
     }
     auto stop_token = stop_src_.get_token();
     auto timed_sched = timed_thread_context_.get_scheduler();
+    auto pool_sched = ppool_->get_scheduler();
     auto tool = tool_;
     auto user_key = user_id;
-    auto work = exec::schedule_after(timed_sched, fallback)
+    auto work = withErrorLog(
+        exec::schedule_after(timed_sched, fallback)
+        | stdexec::continues_on(pool_sched)
         | stdexec::then([this, user_key, tool, stop_token]() {
             if (stop_token.stop_requested()) return;
             std::string local_clip;
@@ -206,9 +276,8 @@ void BotRouter::armJoinEffect(dpp::snowflake user_id, std::string clip_name,
             if (!res.success) {
                 spdlog::warn("Join effect playback failed: {}", res.message);
             }
-        })
-        | stdexec::upon_error([](auto&&) noexcept {})
-        | stdexec::upon_stopped([]() noexcept {});
+        }),
+        "join effect fallback");
     exec::start_detached(std::move(work));
 }
 
@@ -223,20 +292,48 @@ BotRouter::~BotRouter() {
     auto start_time = std::chrono::steady_clock::now();
     while (!weak_monitor.expired()) {
         auto elapsed_time = std::chrono::steady_clock::now() - start_time;
-        if (std::chrono::duration_cast<std::chrono::seconds>(elapsed_time).count() >= 120) {
+        if (elapsed_time >= SHUTDOWN_WAIT_TIMEOUT) {
             spdlog::warn("Timeout reached while waiting for bot pointers to be released.");
             break;
         }
         spdlog::info("Waiting for all bot pointers to be released... Current use count: {}",
                         weak_monitor.use_count());
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        std::this_thread::sleep_for(SHUTDOWN_WAIT_POLL);
     }
 }
 
 void BotRouter::startBgTask() {
     using namespace std::chrono;
-    pbot_->on_voice_receive([tool = tool_](const dpp::voice_receive_t &event) {
-        tool->recordingVoiceCallback(event.audio_data, event.audio_size, event.user_id.str());
+
+    pbot_->on_voice_receive([this, tool = tool_](const dpp::voice_receive_t &event) {
+        // Bound the per-packet hand-off so the queue can't grow unbounded if
+        // RecorderSession lags behind the inbound packet rate. Newer packets
+        // are dropped (audio is realtime — old packets aren't useful anyway).
+        int now_inflight = voice_recv_inflight_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (now_inflight > MAX_VOICE_RECV_INFLIGHT) {
+            voice_recv_inflight_.fetch_sub(1, std::memory_order_relaxed);
+            spdlog::warn("voice_receive backpressure: dropping packet (inflight={} > {})",
+                            now_inflight - 1, MAX_VOICE_RECV_INFLIGHT);
+            return;
+        }
+        auto sched = ppool_->get_scheduler();
+        auto pool_keepalive = ppool_;
+        std::vector<uint8_t> data = event.audio_data;
+        size_t size = event.audio_size;
+        std::string user_id = event.user_id.str();
+        // shared_ptr with custom deleter — decrements when the captured lambda
+        // is destroyed, regardless of whether it ran (covers normal completion,
+        // exception, AND cancellation via upon_stopped).
+        auto inflight_guard = std::shared_ptr<void>(nullptr, [this](void*) {
+            voice_recv_inflight_.fetch_sub(1, std::memory_order_relaxed);
+        });
+        auto work = withErrorLog(
+            stdexec::schedule(sched)
+            | stdexec::then([tool, data = std::move(data), size, user_id = std::move(user_id), pool_keepalive, inflight_guard]() mutable {
+                tool->recordingVoiceCallback(std::move(data), size, user_id);
+            }),
+            "voice_receive");
+        exec::start_detached(std::move(work));
     });
 
     #ifdef NDEBUG
@@ -245,93 +342,116 @@ void BotRouter::startBgTask() {
     static constexpr int VOICE_IDLE_TIMEOUT_SEC = 60;
     #endif
 
-    auto bg_ticker = stdexec::schedule(ppool_->get_scheduler())
-        | stdexec::let_value([this, token = stop_src_.get_token()]() mutable {
-            // Return a sender that performs the loop
-            return stdexec::just() | stdexec::then([this, token]() {
-                dpp::discord_client* client = nullptr;
-                std::mutex client_mutex;
-                // todo: support multi instances
-                std::optional<dpp::snowflake> serving_guild_id = std::nullopt;
-                pbot_->on_voice_ready([&client, &serving_guild_id, &client_mutex](const dpp::voice_ready_t& event) {
-                    std::lock_guard<std::mutex> lg(client_mutex);
-                    spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
-                    client = event.from();
-                    serving_guild_id = event.voice_client->server_id;
-                });
+    struct TickerState {
+        std::mutex client_mutex;
+        dpp::discord_client* client = nullptr;
+        std::optional<dpp::snowflake> serving_guild_id;
+        steady_clock::time_point audio_buffered_timestamp{};
+        microseconds sleep_duration{0};
+        bool init = true;
+        int idle_count = 0;
+    };
+    auto state = std::make_shared<TickerState>();
+    state->sleep_duration = microseconds(bg_task_cycle_ms_ * 1000);
 
-                // cycle_ms * sample_rate * bytes_per_sample * channels
-                const auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000;
-                auto audio_buffered_timestamp = steady_clock::now();
-                auto sleep_duration = microseconds(bg_task_cycle_ms_*1000);
-                bool init = true;
+    pbot_->on_voice_ready([state](const dpp::voice_ready_t& event) {
+        std::lock_guard<std::mutex> lg(state->client_mutex);
+        spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
+        state->client = event.from();
+        state->serving_guild_id = event.voice_client->server_id;
+    });
 
-                auto max_idle_count = VOICE_IDLE_TIMEOUT_SEC * 1000 / bg_task_cycle_ms_;
-                int idle_count = 0;
+    const auto step_size = bg_task_cycle_ms_ * 48000 * 2 * 2 / 1000;
+    const auto cycle_us = microseconds(bg_task_cycle_ms_ * 1000);
+    const auto target_buf_us = microseconds(target_buffered_audio_ms_ * 1000);
+    const auto max_idle_count = VOICE_IDLE_TIMEOUT_SEC * 1000 / bg_task_cycle_ms_;
+    auto timed_sched = timed_thread_context_.get_scheduler();
+    auto pool_keepalive = ppool_;
+    auto token = stop_src_.get_token();
 
-                while (!token.stop_requested()) {
-                    if (token.stop_requested()) break;
+    auto loop = stdexec::schedule(ppool_->get_scheduler())
+        | stdexec::let_value([this, state, token, timed_sched, step_size, cycle_us, target_buf_us, max_idle_count, pool_keepalive]() mutable {
+            auto pool_sched = ppool_->get_scheduler();
+            return exec::repeat_until(
+                stdexec::just()
+                | stdexec::let_value([state, timed_sched, pool_sched]() {
+                    return exec::schedule_after(timed_sched, state->sleep_duration)
+                        | stdexec::continues_on(pool_sched);
+                })
+                | stdexec::then([this, state, token, step_size, cycle_us, target_buf_us, max_idle_count]() {
+                    if (token.stop_requested()) {
+                        spdlog::debug("[Ticker] Cleaning up and stopping.");
+                        return true;
+                    }
+                    // Exceptions are caught here (not propagated to the error
+                    // channel) because we want the loop to keep ticking after
+                    // a transient voice failure — escalating would terminate
+                    // repeat_until and silently kill all audio output.
                     try {
-                        std::lock_guard<std::mutex> lg(client_mutex);
-                        if (client && serving_guild_id) {
-                            auto local_voice_conn = client->get_voice(serving_guild_id.value());
+                        std::lock_guard<std::mutex> lg(state->client_mutex);
+                        if (state->client && state->serving_guild_id) {
+                            auto local_voice_conn = state->client->get_voice(state->serving_guild_id.value());
                             auto audio = tool_->stepAudioMixer(step_size);
                             if (local_voice_conn && audio) {
-                                idle_count = 0;
+                                state->idle_count = 0;
                                 if (local_voice_conn->voiceclient && local_voice_conn->voiceclient->is_ready()) {
-                                    local_voice_conn->voiceclient->send_audio_raw(reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
-                                    if (init) {
-                                        audio_buffered_timestamp = steady_clock::now() + microseconds(bg_task_cycle_ms_ * 1000);
-                                        init = false;
+                                    local_voice_conn->voiceclient->send_audio_raw(
+                                        reinterpret_cast<uint16_t *>(audio->getData()), audio->getSize());
+                                    if (state->init) {
+                                        state->audio_buffered_timestamp = steady_clock::now() + cycle_us;
+                                        state->init = false;
                                     } else {
-                                        audio_buffered_timestamp += microseconds(bg_task_cycle_ms_ * 1000);
+                                        state->audio_buffered_timestamp += cycle_us;
                                     }
-                                    sleep_duration = duration_cast<microseconds>(audio_buffered_timestamp -
-                                        microseconds(target_buffered_audio_ms_ * 1000) - steady_clock::now());
-                                    if (sleep_duration < microseconds(0)) {
-                                        sleep_duration = microseconds(0);
-                                    }
+                                    auto next = duration_cast<microseconds>(
+                                        state->audio_buffered_timestamp - target_buf_us - steady_clock::now());
+                                    if (next < microseconds(0)) next = microseconds(0);
+                                    state->sleep_duration = next;
                                 } else {
-                                    sleep_duration = microseconds(bg_task_cycle_ms_*1000);
+                                    state->sleep_duration = cycle_us;
                                 }
                             } else {
-                                if (!init) {
-                                    idle_count = 0;
-                                    init = true;
+                                if (!state->init) {
+                                    state->idle_count = 0;
+                                    state->init = true;
                                     if (!local_voice_conn) {
                                         spdlog::info("client disconnected voice");
                                         tool_->clearAllAudio();
                                     }
                                 }
                                 if (local_voice_conn) {
-                                    idle_count++;
-                                    if (idle_count >= max_idle_count) {
+                                    state->idle_count++;
+                                    if (state->idle_count >= max_idle_count) {
                                         spdlog::info("Voice connection idle for too long, disconnecting...");
-                                        client->disconnect_voice(serving_guild_id.value());
-                                        idle_count = 0;
+                                        state->client->disconnect_voice(state->serving_guild_id.value());
+                                        state->idle_count = 0;
                                         tool_->clearAllAudio();
-                                        init = true;
+                                        state->init = true;
                                     }
                                 }
-                                sleep_duration = microseconds(bg_task_cycle_ms_*1000);
+                                state->sleep_duration = cycle_us;
                             }
+                        } else {
+                            state->sleep_duration = cycle_us;
                         }
                     } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
-                        client = nullptr;
-                        serving_guild_id = std::nullopt;
+                        state->client = nullptr;
+                        state->serving_guild_id = std::nullopt;
+                        state->sleep_duration = cycle_us;
                     } catch (...) {
                         spdlog::error("Unknown exception in bg task.");
-                        client = nullptr;
-                        serving_guild_id = std::nullopt;
+                        state->client = nullptr;
+                        state->serving_guild_id = std::nullopt;
+                        state->sleep_duration = cycle_us;
                     }
-                    std::this_thread::sleep_for(sleep_duration);
-                }
-                spdlog::debug("[Ticker] Cleaning up and stopping.");
-            });
+                    return token.stop_requested();
+                })
+            );
         });
+    auto wrapped = withErrorLog(std::move(loop), "bg ticker");
 
-    exec::start_detached(std::move(bg_ticker));
+    exec::start_detached(std::move(wrapped));
 }
 
 void BotRouter::start() {
@@ -499,28 +619,66 @@ void BotRouter::setCmds() {
 }
 
 auto BotRouter::getRegisterCmdFunction() -> std::function<void(const dpp::ready_t &event)> {
-    return [local_bot = pbot_, cmds = &cmds_](const dpp::ready_t &event) {
-        // get server id from config
+    return [this, local_bot = pbot_, cmds = &cmds_](const dpp::ready_t &event) {
         const auto& session = event.session_id;
         const auto& id = local_bot->me.id;
         spdlog::info("Bot is ready. Session ID: {}", session);
         spdlog::info("Bot ID: {}", id);
-        if (dpp::run_once<struct register_bot_commands>()) {
-            for (const auto& [cmd_name, cmd_tuple] : *cmds) {
-                const auto& [cmd, _] = cmd_tuple;
-                local_bot->global_command_create(cmd, [cmd_name](const dpp::confirmation_callback_t& cc) {
-                    if (cc.is_error()) {
-                        spdlog::error("Failed to register command '{}': {}", cmd_name, cc.get_error().message);
-                    } else {
-                        spdlog::info("Registered command '{}'", cmd_name);
-                    }
-                });
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
-            spdlog::info("Registered bot commands globally.");
-        } else {
+        if (!dpp::run_once<struct register_bot_commands>()) {
             spdlog::warn("Bot commands have already been registered.");
+            return;
         }
+
+        // Replace the previous sleep_for(1s) loop with a stdexec pipeline
+        // that schedules each global_command_create one second apart on the
+        // timed_thread_context, so no worker is ever blocked by sleep_for.
+        auto items = std::make_shared<std::vector<std::pair<std::string, dpp::slashcommand>>>();
+        for (auto& [cmd_name, cmd_tuple] : *cmds) {
+            items->emplace_back(cmd_name, std::get<0>(cmd_tuple));
+        }
+        auto idx = std::make_shared<std::atomic<size_t>>(0);
+        auto timed_sched = timed_thread_context_.get_scheduler();
+        auto pool_sched = ppool_->get_scheduler();
+        auto pool_keepalive = ppool_;
+        auto loop = withErrorLog(
+            stdexec::schedule(ppool_->get_scheduler())
+            | stdexec::let_value([items, idx, timed_sched, pool_sched, local_bot, pool_keepalive]() mutable {
+                return exec::repeat_until(
+                    exec::schedule_after(timed_sched, CMD_REGISTER_INTERVAL)
+                    | stdexec::continues_on(pool_sched)
+                    | stdexec::then([items, idx, local_bot]() {
+                        size_t i = idx->fetch_add(1);
+                        if (i >= items->size()) return true;
+                        const auto& cmd_name = (*items)[i].first;
+                        // Catch per-iteration so one bad registration doesn't
+                        // abort the whole loop — the remaining commands still
+                        // get a chance to register.
+                        try {
+                            const auto& cmd = (*items)[i].second;
+                            local_bot->global_command_create(cmd,
+                                [cmd_name](const dpp::confirmation_callback_t& cc) {
+                                    if (cc.is_error()) {
+                                        spdlog::error("Failed to register command '{}': {}",
+                                                cmd_name, cc.get_error().message);
+                                    } else {
+                                        spdlog::info("Registered command '{}'", cmd_name);
+                                    }
+                                });
+                        } catch (const std::exception& e) {
+                            spdlog::error("cmd register threw on '{}': {}", cmd_name, e.what());
+                        } catch (...) {
+                            spdlog::error("cmd register threw unknown exception on '{}'", cmd_name);
+                        }
+                        if (i + 1 >= items->size()) {
+                            spdlog::info("Registered bot commands globally.");
+                            return true;
+                        }
+                        return false;
+                    })
+                );
+            }),
+            "cmd register loop");
+        exec::start_detached(std::move(loop));
     };
 }
 
@@ -586,20 +744,20 @@ void BotRouter::handlerExecWrapper(CommandBase* handler, const CmdType& event, s
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::slashcommand_t& event, std::shared_ptr<dpp::cluster> bot) {
-    handler->execute(event, bot);
+    launchHandlerOnPool(ppool_, handler->execute(event, bot));
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::button_click_t& event, std::shared_ptr<dpp::cluster> bot) {
-    handler->button(event, bot);
+    launchHandlerOnPool(ppool_, handler->button(event, bot));
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::form_submit_t& event, std::shared_ptr<dpp::cluster> bot) {
-    handler->form_submit(event, bot);
+    launchHandlerOnPool(ppool_, handler->form_submit(event, bot));
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::select_click_t& event, std::shared_ptr<dpp::cluster> bot) {
-    handler->select(event, bot);
+    launchHandlerOnPool(ppool_, handler->select(event, bot));
 }

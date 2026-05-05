@@ -267,9 +267,10 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
     auto sched = ppool_->get_scheduler();
     exec::timed_thread_scheduler timed_sched = timed_thread_context_.get_scheduler();
     auto work = stdexec::schedule(sched) | stdexec::let_value(
-        [timed_sched, session, end_time, this] {
+        [timed_sched, sched, session, end_time, this] {
             return exec::repeat_until(
                 exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
+                | stdexec::continues_on(sched)
                 | stdexec::then([session, end_time, this] {
                     spdlog::debug("Stream left: {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(end_time - std::chrono::steady_clock::now()).count());
                     auto local_clip = session->streamAudio();
