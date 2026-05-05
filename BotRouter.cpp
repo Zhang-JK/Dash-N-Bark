@@ -103,7 +103,7 @@ std::function<void(const dpp::log_t&)> spdlog_logger() {
 BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     : botToken_(std::move(botToken)),
       pbot_(std::make_shared<dpp::cluster>(botToken_)),
-      ppool_(std::make_shared<exec::static_thread_pool>(4)) {
+      ppool_(std::make_shared<exec::static_thread_pool>(8)) {
     pbot_->on_log(spdlog_logger());
     tool_ = std::make_shared<ToolInterface>(workDir, ppool_);
 

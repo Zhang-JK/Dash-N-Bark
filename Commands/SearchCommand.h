@@ -12,6 +12,7 @@
 #include <mutex>
 #include <ctime>
 #include <random>
+#include <future>
 
 class SearchCommand : public CommandBase {
 public:
@@ -27,8 +28,22 @@ public:
 
         event.thinking();
 
+        // Offload blocking I/O to a separate thread to avoid starving the worker pool
         int max_results = (platform == "bilibili") ? 50 : 20;
-        auto results = tool_interface_->searchByPlatform(keyword, platform, max_results);
+        auto tool = tool_interface_;
+        auto future = std::async(std::launch::async, [tool, keyword, platform, max_results]() {
+            return tool->searchByPlatform(keyword, platform, max_results);
+        });
+
+        // Yield the worker thread while waiting for I/O
+        auto timed_sched = tool_interface_->getTimedScheduler();
+        auto pool_sched = tool_interface_->getPoolScheduler();
+        while (future.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
+            co_await (exec::schedule_after(timed_sched, std::chrono::milliseconds(50))
+                      | stdexec::continues_on(pool_sched));
+        }
+
+        auto results = future.get();
         if (results.empty()) {
             event.edit_original_response(dpp::message("No search results found for \"" + keyword + "\" on " + platform));
             co_return;
@@ -170,7 +185,21 @@ public:
             co_return;
         }
 
-        auto tool_res = tool_interface_->fetchAndEnqueuePlaylist(url, 70);
+        // Offload blocking I/O to a separate thread
+        auto tool = tool_interface_;
+        auto future = std::async(std::launch::async, [tool, url]() {
+            return tool->fetchAndEnqueuePlaylist(url, 70);
+        });
+
+        // Yield the worker thread while waiting for I/O
+        auto timed_sched = tool_interface_->getTimedScheduler();
+        auto pool_sched = tool_interface_->getPoolScheduler();
+        while (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            co_await (exec::schedule_after(timed_sched, std::chrono::milliseconds(100))
+                      | stdexec::continues_on(pool_sched));
+        }
+
+        auto tool_res = future.get();
         if (!tool_res.success || !tool_res.data.has_value()) {
             session.last_action = get_user_name_from_event(event) + " play **FAILED**";
             auto msg = buildSearchMessage(uid, session);
