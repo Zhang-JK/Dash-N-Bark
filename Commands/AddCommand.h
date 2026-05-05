@@ -8,19 +8,28 @@
 #include "CommandBase.h"
 
 #include <dpp/unicode_emoji.h>
+#include <mutex>
+#include <ctime>
+#include <future>
 
 class AddCommand : public CommandBase {
 private:
-    struct AddParams {
+    struct AddSession {
+        std::optional<AudioMixer::AudioClip> clip;
         std::string name;
         std::string user_id;
         std::string tag1;
         std::string tag2;
         bool pin;
+        std::time_t created_at;
+        std::string invoker_name;
+        std::string uid;
     };
-    std::optional<AddParams> params_;
-    std::optional<AudioMixer::AudioClip> processing_clip_;
 
+    static constexpr int SESSION_EXPIRE_SECS = 180;  // 3 minutes
+
+    std::optional<AddSession> active_session_;
+    mutable std::mutex session_mutex_;
 
 public:
     AddCommand() = delete;
@@ -75,7 +84,7 @@ public:
         return static_cast<size_t>(time_sec * sample_rate);
     }
 
-    static auto assembleButton() -> dpp::component {
+    static auto assembleButton(const std::string& uid) -> dpp::component {
         auto ts = std::to_string(static_cast<long long>(std::time(nullptr)));
         return dpp::component().set_type(dpp::cot_action_row)
             .add_component(
@@ -84,7 +93,7 @@ public:
                     .set_label("Preview")
                     .set_emoji(dpp::unicode_emoji::smile)
                     .set_style(dpp::cos_secondary)
-                    .set_id("add::Preview::" + ts)
+                    .set_id("add::Preview::" + ts + "::" + uid)
             )
             .add_component(
                 dpp::component()
@@ -92,7 +101,7 @@ public:
                     .set_label("Confirm")
                     .set_emoji(dpp::unicode_emoji::white_check_mark)
                     .set_style(dpp::cos_success)
-                    .set_id("add::Confirm::" + ts)
+                    .set_id("add::Confirm::" + ts + "::" + uid)
             )
             .add_component(
                 dpp::component()
@@ -100,7 +109,7 @@ public:
                     .set_label("Cancel")
                     .set_emoji(dpp::unicode_emoji::x)
                     .set_style(dpp::cos_danger)
-                    .set_id("add::Cancel::" + ts)
+                    .set_id("add::Cancel::" + ts + "::" + uid)
             );
     }
 
@@ -135,7 +144,22 @@ public:
         auto buffer_length = timeToBufferIndex(end_sec - start_sec, AudioMixer::BYTES_PER_SEC_DEFAULT);
 
         event.reply(dpp::ir_deferred_channel_message_with_source, "Fetching sound from URL...");
-        auto fetch_res = tool_interface_->fetchSoundFromUrl(url);
+
+        // Offload blocking I/O to a separate thread
+        auto tool = tool_interface_;
+        auto future = std::async(std::launch::async, [tool, url]() {
+            return tool->fetchSoundFromUrl(url);
+        });
+
+        // Yield the worker thread while waiting for I/O
+        auto timed_sched = tool_interface_->getTimedScheduler();
+        auto pool_sched = tool_interface_->getPoolScheduler();
+        while (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            co_await (exec::schedule_after(timed_sched, std::chrono::milliseconds(100))
+                      | stdexec::continues_on(pool_sched));
+        }
+
+        auto fetch_res = future.get();
         if (!fetch_res.success || !fetch_res.data) {
             event.edit_original_response(dpp::message("Failed to fetch sound for " + fetch_res.message +
                         " with err code " + std::to_string(fetch_res.error_code)));
@@ -145,15 +169,28 @@ public:
             event.edit_original_response(dpp::message("The fetched sound is shorter than the specified end time."));
             co_return;
         }
-        if (processing_clip_) {
-            processing_clip_.reset();
+
+        std::string uid = random_gen_id();
+        {
+            std::lock_guard<std::mutex> lock(session_mutex_);
+            if (active_session_) {
+                event.edit_original_response(dpp::message(
+                    "Another /add session is already active (by " + active_session_->invoker_name +
+                    "). Please wait for it to complete or expire."));
+                co_return;
+            }
+            AddSession session;
+            session.clip = std::optional(AudioMixer::AudioClip(std::move(fetch_res.data.value()), start_pos, buffer_length));
+            session.name = name;
+            session.user_id = user_id;
+            session.tag1 = tag1;
+            session.tag2 = tag2;
+            session.pin = pin;
+            session.created_at = std::time(nullptr);
+            session.invoker_name = get_user_name_from_event(event);
+            session.uid = uid;
+            active_session_ = std::move(session);
         }
-        if (params_) {
-            params_.reset();
-        }
-        processing_clip_ = std::optional(
-            AudioMixer::AudioClip(std::move(fetch_res.data.value()), start_pos, buffer_length));
-        params_ = AddParams{name, user_id, tag1, tag2, pin};
 
         char dur_buf[32];
         std::snprintf(dur_buf, sizeof(dur_buf), "%.3g", end_sec - start_sec);
@@ -163,55 +200,87 @@ public:
                                                  "Pinned: " + (pin ? "Yes" : "No") + "\n"
                                                  "Duration: " + std::string(dur_buf) + " seconds");
 
-        msg.add_component(assembleButton());
+        msg.add_component(assembleButton(uid));
         event.edit_original_response(msg);
         co_return;
     }
 
     exec::task<void> button(dpp::button_click_t event, std::shared_ptr<dpp::cluster> bot) override {
         auto ids = parseButtonId(event.custom_id);
-        if (ids.size() != 3 || ids[0] != "add") {
-            event.reply("Invalid button ID for add");
+        if (ids.size() != 4 || ids[0] != "add") {
+            event.reply(dpp::ir_update_message, "Invalid button ID for add");
             co_return;
         }
-        if (!processing_clip_ || !params_) {
-            event.reply(dpp::ir_update_message,
-                "No active add session, please use /add command to start a new session.");
-            processing_clip_.reset();
-            params_.reset();
-            spdlog::warn("No active add session when handling button click");
+
+        const std::string& cmd = ids[1];
+        auto recv_ts = std::stoll(ids[2]);
+        const std::string& uid = ids[3];
+        auto now_ts = std::time(nullptr);
+
+        if (now_ts - recv_ts > SESSION_EXPIRE_SECS) {
+            event.reply(dpp::ir_update_message, "This add session has expired.");
+            std::lock_guard<std::mutex> lock(session_mutex_);
+            if (active_session_ && active_session_->uid == uid) {
+                active_session_.reset();
+            }
             co_return;
         }
-        if (ids[1] == "Preview") {
+
+        if (cmd == "Preview") {
+            std::optional<AudioMixer::AudioClip> clip_copy;
+            std::string name_copy;
+            {
+                std::lock_guard<std::mutex> lock(session_mutex_);
+                if (!active_session_ || active_session_->uid != uid) {
+                    event.reply(dpp::ir_update_message, "This add session is no longer valid.");
+                    co_return;
+                }
+                clip_copy = active_session_->clip.value();
+                name_copy = active_session_->name;
+            }
+
             if (!co_await joinVoiceChannel(event, true)) {
                 co_return;
             }
-            tool_interface_->playAudioClip(processing_clip_.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
-            dpp::message msg(event.command.channel_id,
-                    "Previewing the audio clip " + params_.value().name);
-            msg.add_component(assembleButton());
+            tool_interface_->playAudioClip(clip_copy.value(), AudioMixer::AudioMixer::AUDIO_EFFECT);
+            dpp::message msg(event.command.channel_id, "Previewing the audio clip " + name_copy);
+            msg.add_component(assembleButton(uid));
             event.edit_original_response(msg);
-        } else if (ids[1] == "Confirm") {
-            auto add_res = tool_interface_->addToSoundpad(processing_clip_.value(),
-                                                                                    params_.value().name,
-                                                                                    params_.value().user_id,
-                                                                                    params_.value().tag1,
-                                                                                    params_.value().tag2,
-                                                                                    params_.value().pin);
+        } else if (cmd == "Confirm") {
+            std::optional<AudioMixer::AudioClip> clip_copy;
+            std::string name, user_id, tag1, tag2;
+            bool pin;
+            {
+                std::lock_guard<std::mutex> lock(session_mutex_);
+                if (!active_session_ || active_session_->uid != uid) {
+                    event.reply(dpp::ir_update_message, "This add session is no longer valid.");
+                    co_return;
+                }
+                clip_copy = active_session_->clip.value();
+                name = active_session_->name;
+                user_id = active_session_->user_id;
+                tag1 = active_session_->tag1;
+                tag2 = active_session_->tag2;
+                pin = active_session_->pin;
+                active_session_.reset();
+            }
+
+            auto add_res = tool_interface_->addToSoundpad(clip_copy.value(), name, user_id, tag1, tag2, pin);
             if (!add_res.success) {
                 event.reply(dpp::ir_update_message, "Failed to add to soundpad: " + add_res.message);
             } else {
-                event.reply(dpp::ir_update_message, "Added " + params_.value().name +
-                    " to soundpad, This session is done");
+                event.reply(dpp::ir_update_message, "Added " + name + " to soundpad. Session complete.");
             }
-            processing_clip_.reset();
-            params_.reset();
-        } else if (ids[1] == "Cancel") {
-            processing_clip_.reset();
-            params_.reset();
-            event.reply(dpp::ir_update_message, "Operation cancelled, This session is done");
+        } else if (cmd == "Cancel") {
+            {
+                std::lock_guard<std::mutex> lock(session_mutex_);
+                if (active_session_ && active_session_->uid == uid) {
+                    active_session_.reset();
+                }
+            }
+            event.reply(dpp::ir_update_message, "Operation cancelled. Session complete.");
         } else {
-            spdlog::info("Unknown action: {} {} {}", ids[0], ids[1], ids[2]);
+            spdlog::info("Unknown action: {} {} {} {}", ids[0], ids[1], ids[2], ids[3]);
             event.reply(dpp::ir_update_message, "Unknown action.");
         }
         co_return;
