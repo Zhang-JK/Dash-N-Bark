@@ -405,8 +405,13 @@ namespace StreamFetch {
                     {"keyword", keyword},
                     {"page", "1"},
                     {"page_size", std::to_string(max_results)}
-                }
+                },
+                cpr::Timeout{30000}
             );
+            if (response.error.code == cpr::ErrorCode::OPERATION_TIMEDOUT) {
+                spdlog::warn("Bilibili search timed out after 30s");
+                return true;
+            }
             if (response.status_code == 412) {
                 return false;
             }

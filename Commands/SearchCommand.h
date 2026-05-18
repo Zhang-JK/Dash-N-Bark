@@ -50,6 +50,7 @@ public:
         }
 
         std::string uid = random_gen_id();
+        Session session_snapshot;
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             evict_old_sessions();
@@ -61,9 +62,10 @@ public:
             session.created_at = std::time(nullptr);
             session.invoker_name = get_user_name_from_event(event);
             session.last_action = "Opened search";
+            session_snapshot = session;
         }
 
-        auto msg = buildSearchMessage(uid, sessions_[uid]);
+        auto msg = buildSearchMessage(uid, session_snapshot);
         event.edit_original_response(msg);
         co_return;
     }
@@ -88,7 +90,9 @@ public:
             co_return;
         }
 
-        Session* session_ptr = nullptr;
+        std::string user_name = get_user_name_from_event(event);
+        Session session_snapshot;
+        bool found = false;
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             auto it = sessions_.find(uid);
@@ -96,32 +100,34 @@ public:
                 event.reply(dpp::ir_update_message, dpp::message("Search session not found."));
                 co_return;
             }
-            session_ptr = &it->second;
+            Session& session = it->second;
+            if (cmd == "prev") {
+                if (session.current_page > 0) {
+                    session.current_page--;
+                    session.last_action = user_name + " went to previous page";
+                } else {
+                    session.last_action = user_name + " is already at the first page";
+                }
+                found = true;
+            } else if (cmd == "next") {
+                int total_results = static_cast<int>(session.results.size());
+                int total_pages = (total_results + RESULTS_PER_PAGE - 1) / RESULTS_PER_PAGE;
+                if (total_pages == 0) total_pages = 1;
+                if (session.current_page < total_pages - 1) {
+                    session.current_page++;
+                    session.last_action = user_name + " went to next page";
+                } else {
+                    session.last_action = user_name + " is already at the last page";
+                }
+                found = true;
+            }
+            if (found) {
+                session_snapshot = session;
+            }
         }
 
-        Session& session = *session_ptr;
-        std::string user_name = get_user_name_from_event(event);
-
-        if (cmd == "prev") {
-            if (session.current_page > 0) {
-                session.current_page--;
-                session.last_action = user_name + " went to previous page";
-            } else {
-                session.last_action = user_name + " is already at the first page";
-            }
-            auto msg = buildSearchMessage(uid, session);
-            event.reply(dpp::ir_update_message, msg);
-        } else if (cmd == "next") {
-            int total_results = static_cast<int>(session.results.size());
-            int total_pages = (total_results + RESULTS_PER_PAGE - 1) / RESULTS_PER_PAGE;
-            if (total_pages == 0) total_pages = 1;
-            if (session.current_page < total_pages - 1) {
-                session.current_page++;
-                session.last_action = user_name + " went to next page";
-            } else {
-                session.last_action = user_name + " is already at the last page";
-            }
-            auto msg = buildSearchMessage(uid, session);
+        if (found) {
+            auto msg = buildSearchMessage(uid, session_snapshot);
             event.reply(dpp::ir_update_message, msg);
         }
         co_return;
@@ -146,7 +152,14 @@ public:
             co_return;
         }
 
-        Session* session_ptr = nullptr;
+        auto selected_values = event.values;
+        if (selected_values.empty()) {
+            co_return;
+        }
+        std::string vid = selected_values[0];
+
+        std::string platform_local;
+        std::string video_title;
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             auto it = sessions_.find(uid);
@@ -154,28 +167,19 @@ public:
                 event.reply(dpp::ir_update_message, "Search session not found.");
                 co_return;
             }
-            session_ptr = &it->second;
-        }
-
-        Session& session = *session_ptr;
-        auto selected_values = event.values;
-
-        if (selected_values.empty()) {
-            co_return;
-        }
-
-        std::string vid = selected_values[0];
-        std::string video_title;
-        for (const auto& r : session.results) {
-            if (r.bvid_or_vid == vid) {
-                video_title = r.title;
-                break;
+            Session& session = it->second;
+            platform_local = session.platform;
+            for (const auto& r : session.results) {
+                if (r.bvid_or_vid == vid) {
+                    video_title = r.title;
+                    break;
+                }
             }
+            session.last_action = get_user_name_from_event(event) + " played " + video_title;
         }
-        session.last_action = get_user_name_from_event(event) + " played " + video_title;
 
         std::string url;
-        if (session.platform == "youtube") {
+        if (platform_local == "youtube") {
             url = "https://www.youtube.com/watch?v=" + vid;
         } else {
             url = "https://www.bilibili.com/video/" + vid;
@@ -200,14 +204,31 @@ public:
         }
 
         auto tool_res = future.get();
-        if (!tool_res.success || !tool_res.data.has_value()) {
-            session.last_action = get_user_name_from_event(event) + " play **FAILED**";
-            auto msg = buildSearchMessage(uid, session);
-            event.edit_original_response(msg);
-            co_return;
+
+        // Re-acquire the lock — the session may have been evicted by another
+        // /search caller during joinVoiceChannel (up to 3s) and the fetch I/O.
+        // If it's gone, skip the message refresh; the original "played X" line
+        // already shipped with the next button click for any user still holding
+        // the message open.
+        Session session_snapshot;
+        bool still_alive = false;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto it = sessions_.find(uid);
+            if (it != sessions_.end()) {
+                Session& session = it->second;
+                if (!tool_res.success || !tool_res.data.has_value()) {
+                    session.last_action = get_user_name_from_event(event) + " play **FAILED**";
+                }
+                session_snapshot = session;
+                still_alive = true;
+            }
         }
-        auto msg = buildSearchMessage(uid, session);
-        event.edit_original_response(msg);
+
+        if (still_alive) {
+            auto msg = buildSearchMessage(uid, session_snapshot);
+            event.edit_original_response(msg);
+        }
         co_return;
     }
 
