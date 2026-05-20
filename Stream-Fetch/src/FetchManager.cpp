@@ -11,6 +11,7 @@
 #include <ctime>
 #include <iomanip>
 #include <thread>
+#include <sys/wait.h>
 
 #include <nlohmann/json.hpp>
 #include <cpr/cpr.h>
@@ -54,7 +55,8 @@ namespace {
     time_t parseYoutubeUploadDate(const std::string& video_id) {
         try {
             auto response = cpr::Get(cpr::Url{"https://www.youtube.com/watch?v=" + video_id},
-                cpr::Header{{"User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}});
+                cpr::Header{{"User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}},
+                cpr::Timeout{10000});
             if (response.status_code == 200) {
                 std::regex date_regex("\"uploadDate\"\\s*:\\s*\"([^\"]+)\"");
                 std::smatch match;
@@ -121,7 +123,7 @@ namespace StreamFetch {
             int sub_index = 1;          // starts from 1 not 0
             size_t pos = url.find("video/");
             if (pos == std::string::npos) {
-                cpr::Response r = cpr::Head(cpr::Url{url});
+                cpr::Response r = cpr::Head(cpr::Url{url}, cpr::Timeout{10000});
                 std::string distinct_url = r.url.str();
                 if (distinct_url != url && distinct_url.find("video/") != std::string::npos) {
                   return fetchFromURL(distinct_url);
@@ -147,7 +149,7 @@ namespace StreamFetch {
         } else if (url.find("youtube") != std::string::npos || url.find("youtu.be") != std::string::npos) {
             size_t pos = url.find("v=");
             if (pos == std::string::npos) {
-                cpr::Response r = cpr::Head(cpr::Url{url});
+                cpr::Response r = cpr::Head(cpr::Url{url}, cpr::Timeout{10000});
                 std::string distinct_url = r.url.str();
                 if (distinct_url != url && distinct_url.find("v=") != std::string::npos) {
                     return fetchFromURL(distinct_url);
@@ -200,7 +202,8 @@ namespace StreamFetch {
     FetchManager::StreamFetchResult FetchManager::saveBilibiliVideo(const std::string &vid, int sub_index) const {
         // if vid begins with "BV", use bvid parameter, else use aid parameter
         cpr::Response r = cpr::Get(cpr::Url{"https://api.bilibili.com/x/web-interface/wbi/view"},
-            cpr::Parameters{vid.rfind("BV", 0) == 0 ? cpr::Parameter{"bvid", vid} : cpr::Parameter{"aid", vid}});
+            cpr::Parameters{vid.rfind("BV", 0) == 0 ? cpr::Parameter{"bvid", vid} : cpr::Parameter{"aid", vid}},
+            cpr::Timeout{15000});
         if (r.status_code != 200) {
             return {-4, error_code_and_msg[-4]};
         }
@@ -248,7 +251,8 @@ namespace StreamFetch {
             cpr::Parameters{cpr::Parameter{"bvid", bvid},
                                cpr::Parameter{"cid", std::to_string(cid)},
                                cpr::Parameter{"qn", "32"},
-                               cpr::Parameter{"fnval", "16"}});
+                               cpr::Parameter{"fnval", "16"}},
+            cpr::Timeout{15000});
         if (r.status_code != 200) {
             return {-4, error_code_and_msg[-4]};
         }
@@ -305,7 +309,18 @@ namespace StreamFetch {
                         [&fout](std::string_view data, intptr_t _) {
                             fout.write(data.data(), data.size());
                             return true;
-                    }));
+                    }),
+                    // Generous ceiling: long audio tracks legitimately take a
+                    // while, but a stuck CDN must not hang us forever.
+                    cpr::Timeout{180000},
+                    // Stall guard: fewer than 1 KB/s for 30s -> bail out.
+                    cpr::LowSpeed{1024, 30});
+                if (download_response.error.code == cpr::ErrorCode::OPERATION_TIMEDOUT) {
+                    spdlog::warn("Bilibili audio download stalled/timed out for {}", url);
+                    fout.close();
+                    std::filesystem::remove(filename);
+                    return {};
+                }
                 // check status code
                 if (download_response.status_code != 200) {
                     fout.close();
@@ -367,25 +382,38 @@ namespace StreamFetch {
             spdlog::error("input file does not exist: {}", path);
             return {};
         }
-        
+
         std::string output_path = path.substr(0, path.find_last_of('.')) + ".pcm";
-        
-        // Use FFmpeg to convert m4s to 16-bit stereo 44100Hz PCM
+
+        // Use FFmpeg to convert m4s to 16-bit stereo 48kHz PCM.
+        // Wrap with `timeout 60s` so a wedged ffmpeg can't hang the fetch
+        // pipeline forever — observed in the wild on malformed DASH/m4s
+        // segments where the download completes but conversion never returns.
         // todo: make sure ffmpeg is installed and in PATH or just use ffmpeg static build
-        std::string ffmpeg_cmd = "ffmpeg -i \"" + path + "\" -quality good -c:a pcm_s16le -f s16le -ar 48000 -ac 2 \"" + output_path + "\" -y";
-        
+        std::string ffmpeg_cmd = "timeout 20s ffmpeg -nostdin -i \"" + path + "\" -quality good -c:a pcm_s16le -f s16le -ar 48000 -ac 2 \"" + output_path + "\" -y";
+
         std::string ffmpeg_cmd_silent = ffmpeg_cmd + " > /dev/null 2>&1";
         int ret = std::system(ffmpeg_cmd_silent.c_str());
         if (ret != 0) {
-            spdlog::error("ffmpeg conversion failed with exit code: {}", ret);
+            // `timeout` returns 124 when it kills the child; surface that
+            // specifically so the log line is actionable rather than the
+            // opaque "exit code: 31744" you'd otherwise see.
+            int exit_status = WIFEXITED(ret) ? WEXITSTATUS(ret) : -1;
+            if (exit_status == 124) {
+                spdlog::error("ffmpeg conversion timed out after 60s on {}", path);
+            } else {
+                spdlog::error("ffmpeg conversion failed with exit code: {}", ret);
+            }
+            std::error_code ec;
+            std::filesystem::remove(output_path, ec);
             return {};
         }
-        
+
         if (!std::filesystem::exists(output_path)) {
             spdlog::error("output pcm file was not created: {}", output_path);
             return {};
         }
-        
+
         spdlog::info("successfully converted {} to PCM", path);
         return output_path;
     }
