@@ -44,6 +44,18 @@ if (NOT DEFINED OPUS_INCLUDE_DIRS OR OPUS_INCLUDE_DIRS STREQUAL "" OR OPUS_INCLU
 endif()
 message("Found OPUS: ${OPUS_LIBRARIES} in ${OPUS_INCLUDE_DIRS}")
 
+# cpptrace: in-process stack traces for crash + deadlock diagnostics.
+# Pulled in via FetchContent so the build stays self-contained. cpptrace
+# auto-detects an available DWARF backend (libdw on this host).
+include(FetchContent)
+FetchContent_Declare(
+    cpptrace
+    GIT_REPOSITORY https://github.com/jeremy-rifkin/cpptrace.git
+    GIT_TAG        v0.7.5
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(cpptrace)
+
 # compile local libs
 add_subdirectory(Audio-Mixer)
 add_subdirectory(Stream-Fetch)
@@ -53,14 +65,18 @@ add_executable(${PROJECT_NAME}
         main.cpp
         BotRouter.cpp
         ToolInterface.cpp
+        CrashHandler.cpp
         Commands/SoundpadCommand.h
         Commands/AddCommand.h
         Commands/ParrotCommand.h
         Commands/SearchCommand.h
         Commands/JoinEffectCommand.h
 )
-target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json)
+target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json cpptrace::cpptrace)
 target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)
+# Export symbols into the dynamic table so cpptrace can resolve frame addresses
+# back to function names even in release builds where DWARF info is stripped.
+target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if(NOT EXISTS ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux)
@@ -84,3 +100,9 @@ file(CHMOD ${CMAKE_BINARY_DIR}/bin/yt-dlp_linux PERMISSIONS OWNER_READ OWNER_WRI
 install(TARGETS ${PROJECT_NAME} dpp stdexec audio_mixer spdlog stream_fetch nlohmann_json bungee_library
         RUNTIME DESTINATION bin
         LIBRARY DESTINATION lib)
+
+# Tests (opt-in via -DDASH_N_BARK_BUILD_TESTS=ON, default ON in Debug).
+option(DASH_N_BARK_BUILD_TESTS "Build test harnesses" ON)
+if(DASH_N_BARK_BUILD_TESTS)
+    add_subdirectory(tests/crash_handler)
+endif()

@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include "BotRouter.h"
+#include "CrashHandler.h"
 
 #if defined(_DEBUG) || defined(DEBUG) || !defined(NDEBUG)
 #define GLOBAL_WORKING_DIR "../testdata/"
@@ -22,6 +23,10 @@
 #endif
 
 int main() {
+    // Install crash + deadlock-trace signal handlers first so we capture even
+    // very-early crashes (e.g. during config parsing).
+    CrashHandler::install();
+
     // set logging
     #if defined(_DEBUG) || defined(DEBUG) || !defined(NDEBUG)
         spdlog::set_level(spdlog::level::trace);

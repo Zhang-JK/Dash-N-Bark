@@ -41,9 +41,11 @@ namespace {
     constexpr int MAX_VOICE_RECV_INFLIGHT = 32;
 
     // ---- liveness watchdog --------------------------------------------------
-    // Heartbeat cadences. The watchdog script tolerates files older than its
-    // own staleness threshold (currently 60s — see scripts/watchdog.sh). We
-    // beat much more frequently than that so transient scheduling jitter
+    // Two heartbeat files are touched on independent threads (gateway IO and
+    // worker pool). If either falls behind the watchdog's staleness threshold
+    // (currently 60s — see scripts/watchdog.sh), the watchdog sends SIGUSR1
+    // so CrashHandler dumps per-thread stack traces, then kills us. We beat
+    // much more frequently than the threshold so transient scheduling jitter
     // doesn't trip a false restart.
     constexpr uint64_t GATEWAY_HEARTBEAT_SECS = 10;       // DPP timer in seconds
     constexpr auto POOL_HEARTBEAT_INTERVAL = std::chrono::seconds(5);
@@ -54,10 +56,10 @@ namespace {
     constexpr const char* HEARTBEAT_POOL_FILE = "logs/heartbeat.pool";
 
     // Atomically refresh a heartbeat file: write the current unix timestamp
-    // to logs/<name>.tmp then rename over the target so a watchdog stat()
-    // can never observe a half-written file. Failure is silent — heartbeats
-    // are best-effort; if the filesystem is broken the watchdog will detect
-    // the lack of mtime updates and restart us, which is the right outcome.
+    // to <path>.tmp then rename over the target so a watchdog stat() can
+    // never observe a half-written file. Failure is silent — heartbeats are
+    // best-effort; if the filesystem is broken the watchdog detects the
+    // missing mtime updates and restarts us, which is the right outcome.
     void writeHeartbeat(const char* path) noexcept {
         try {
             std::error_code ec;
@@ -336,10 +338,10 @@ BotRouter::~BotRouter() {
 void BotRouter::startBgTask() {
     using namespace std::chrono;
 
-    // Gateway liveness heartbeat. Fires on DPP's IO thread, which proves
-    // the websocket pump is still draining events. If the gateway is
-    // deadlocked or stuck reconnecting, this timer stops firing and the
-    // watchdog script restarts us.
+    // Gateway liveness heartbeat. Fires on DPP's IO thread, proving the
+    // websocket pump is still draining events. If the gateway deadlocks or
+    // is stuck reconnecting, this timer stops firing and the watchdog
+    // restarts us (sending SIGUSR1 for a thread dump first).
     pbot_->start_timer([](dpp::timer) {
         writeHeartbeat(HEARTBEAT_GATEWAY_FILE);
     }, GATEWAY_HEARTBEAT_SECS);
@@ -440,9 +442,9 @@ void BotRouter::startBgTask() {
                     // Pool liveness heartbeat. This tick body running at all
                     // proves the worker pool + timed scheduler are healthy;
                     // throttle the file write so we don't churn the disk every
-                    // 60ms. If this loop deadlocks (e.g. a worker stuck in a
-                    // tool call), the file goes stale and the watchdog will
-                    // restart us.
+                    // 60ms. If the worker pool deadlocks (e.g. a mutex inversion
+                    // in a tool call), the file goes stale and the watchdog
+                    // sends SIGUSR1 for a thread dump, then restarts us.
                     auto now_steady = steady_clock::now();
                     if (now_steady - state->last_pool_beat >= POOL_HEARTBEAT_INTERVAL) {
                         writeHeartbeat(HEARTBEAT_POOL_FILE);
