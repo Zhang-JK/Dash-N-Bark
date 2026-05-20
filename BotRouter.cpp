@@ -6,6 +6,8 @@
 #include <exec/start_detached.hpp>
 #include <exec/repeat_until.hpp>
 #include <exec/task.hpp>
+#include <filesystem>
+#include <fstream>
 
 #include "BotRouter.h"
 
@@ -37,6 +39,43 @@ namespace {
     // ~32 packets ≈ 640ms of audio at 20ms-per-packet cadence; if the
     // recorder can't drain that fast, we drop excess to bound memory.
     constexpr int MAX_VOICE_RECV_INFLIGHT = 32;
+
+    // ---- liveness watchdog --------------------------------------------------
+    // Heartbeat cadences. The watchdog script tolerates files older than its
+    // own staleness threshold (currently 60s — see scripts/watchdog.sh). We
+    // beat much more frequently than that so transient scheduling jitter
+    // doesn't trip a false restart.
+    constexpr uint64_t GATEWAY_HEARTBEAT_SECS = 10;       // DPP timer in seconds
+    constexpr auto POOL_HEARTBEAT_INTERVAL = std::chrono::seconds(5);
+    // logs/ matches scripts/watchdog.sh's $LOG_DIR. In debug builds the cwd
+    // is the cmake-build-debug dir, so we still get a valid relative path.
+    constexpr const char* HEARTBEAT_DIR = "logs";
+    constexpr const char* HEARTBEAT_GATEWAY_FILE = "logs/heartbeat.gateway";
+    constexpr const char* HEARTBEAT_POOL_FILE = "logs/heartbeat.pool";
+
+    // Atomically refresh a heartbeat file: write the current unix timestamp
+    // to logs/<name>.tmp then rename over the target so a watchdog stat()
+    // can never observe a half-written file. Failure is silent — heartbeats
+    // are best-effort; if the filesystem is broken the watchdog will detect
+    // the lack of mtime updates and restart us, which is the right outcome.
+    void writeHeartbeat(const char* path) noexcept {
+        try {
+            std::error_code ec;
+            std::filesystem::create_directories(HEARTBEAT_DIR, ec);
+            std::string tmp = std::string(path) + ".tmp";
+            {
+                std::ofstream out(tmp, std::ios::trunc);
+                if (!out) return;
+                out << std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                        .count()
+                    << '\n';
+            }
+            std::filesystem::rename(tmp, path, ec);
+        } catch (...) {
+            // never let a heartbeat write throw
+        }
+    }
 
     // Append the canonical error / stopped tail to a sender. Replaces the
     // previous noexcept-with-try-catch pattern: exceptions thrown inside a
@@ -313,6 +352,19 @@ BotRouter::~BotRouter() {
 void BotRouter::startBgTask() {
     using namespace std::chrono;
 
+    // Gateway liveness heartbeat. Fires on DPP's IO thread, which proves
+    // the websocket pump is still draining events. If the gateway is
+    // deadlocked or stuck reconnecting, this timer stops firing and the
+    // watchdog script restarts us.
+    pbot_->start_timer([](dpp::timer) {
+        writeHeartbeat(HEARTBEAT_GATEWAY_FILE);
+    }, GATEWAY_HEARTBEAT_SECS);
+    // Emit one immediately so the file exists from t=0 — otherwise the
+    // watchdog could trip during the first GATEWAY_HEARTBEAT_SECS seconds
+    // of normal startup.
+    writeHeartbeat(HEARTBEAT_GATEWAY_FILE);
+    writeHeartbeat(HEARTBEAT_POOL_FILE);
+
     pbot_->on_voice_receive([this, tool = tool_](const dpp::voice_receive_t &event) {
         // Bound the per-packet hand-off so the queue can't grow unbounded if
         // RecorderSession lags behind the inbound packet rate. Newer packets
@@ -358,6 +410,10 @@ void BotRouter::startBgTask() {
         microseconds sleep_duration{0};
         bool init = true;
         int idle_count = 0;
+        // Last time we touched the pool heartbeat file. The ticker fires every
+        // bg_task_cycle_ms_ (~60ms); writing to disk that often is wasteful,
+        // so we throttle by checking elapsed time against POOL_HEARTBEAT_INTERVAL.
+        steady_clock::time_point last_pool_beat{};
     };
     auto state = std::make_shared<TickerState>();
     state->sleep_duration = microseconds(bg_task_cycle_ms_ * 1000);
@@ -390,6 +446,17 @@ void BotRouter::startBgTask() {
                     if (token.stop_requested()) {
                         spdlog::debug("[Ticker] Cleaning up and stopping.");
                         return true;
+                    }
+                    // Pool liveness heartbeat. This tick body running at all
+                    // proves the worker pool + timed scheduler are healthy;
+                    // throttle the file write so we don't churn the disk every
+                    // 60ms. If this loop deadlocks (e.g. a worker stuck in a
+                    // tool call), the file goes stale and the watchdog will
+                    // restart us.
+                    auto now_steady = steady_clock::now();
+                    if (now_steady - state->last_pool_beat >= POOL_HEARTBEAT_INTERVAL) {
+                        writeHeartbeat(HEARTBEAT_POOL_FILE);
+                        state->last_pool_beat = now_steady;
                     }
                     // Exceptions are caught here (not propagated to the error
                     // channel) because we want the loop to keep ticking after
