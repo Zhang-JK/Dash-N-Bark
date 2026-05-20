@@ -206,6 +206,11 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
 
         auto* client = ev.from();
         if (!client) return;
+        // Capture the shard *id*, not the pointer. DPP can recycle the shard
+        // (delete + new) before this lambda runs on the pool, which would UAF
+        // any cached discord_client*. The id is stable across recycles, and
+        // pbot_->get_shard(sid) re-resolves to the current pointer.
+        uint32_t shard_id = client->shard_id;
 
         // Move the DB read + voice connect off the DPP event-loop thread.
         auto sched = ppool_->get_scheduler();
@@ -214,11 +219,17 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
         auto self_bot = pbot_;
         auto work = withErrorLog(
             stdexec::schedule(sched)
-            | stdexec::then([this, guild_id, user_id, channel_id, client, tool, self_bot, pool_keepalive]() {
+            | stdexec::then([this, guild_id, user_id, channel_id, shard_id, tool, self_bot, pool_keepalive]() {
                 auto clip = tool->getJoinEffect(guild_id.str(), user_id.str());
                 if (!clip) return;
 
-                auto* raw_vc = client->get_voice(guild_id);
+                // Re-resolve the shard inside the lambda so we never touch a
+                // recycled discord_client*. Nullptr means the shard is
+                // currently reconnecting — drop the event.
+                auto* shard = self_bot->get_shard(shard_id);
+                if (!shard) return;
+
+                auto* raw_vc = shard->get_voice(guild_id);
                 std::shared_ptr<dpp::voiceconn> vc;
                 if (raw_vc) {
                     try {
@@ -352,7 +363,12 @@ void BotRouter::startBgTask() {
 
     struct TickerState {
         std::mutex client_mutex;
-        dpp::discord_client* client = nullptr;
+        // We store the shard *id* rather than a discord_client* because DPP
+        // recycles shards (delete + new) across gateway reconnects, RESUME
+        // failures, and IDENTIFY flows. Any cached pointer becomes dangling.
+        // -1 means "no shard known yet" — populated in on_voice_ready and
+        // re-resolved via pbot_->get_shard(shard_id) on every tick.
+        int shard_id = -1;
         std::optional<dpp::snowflake> serving_guild_id;
         steady_clock::time_point audio_buffered_timestamp{};
         microseconds sleep_duration{0};
@@ -365,7 +381,8 @@ void BotRouter::startBgTask() {
     pbot_->on_voice_ready([state](const dpp::voice_ready_t& event) {
         std::lock_guard<std::mutex> lg(state->client_mutex);
         spdlog::debug("on_voice_ready triggered for channel {}", event.voice_client->channel_id);
-        state->client = event.from();
+        auto* from = event.from();
+        state->shard_id = from ? static_cast<int>(from->shard_id) : -1;
         state->serving_guild_id = event.voice_client->server_id;
     });
 
@@ -397,7 +414,14 @@ void BotRouter::startBgTask() {
                     // repeat_until and silently kill all audio output.
                     try {
                         std::lock_guard<std::mutex> lg(state->client_mutex);
-                        if (state->client && state->serving_guild_id) {
+                        // Resolve the shard freshly each tick. DPP recycles
+                        // discord_client* across reconnects, so the pointer
+                        // returned by get_shard last cycle may already be
+                        // freed — caching it inside TickerState would UAF.
+                        dpp::discord_client* shard = (state->shard_id >= 0)
+                            ? pbot_->get_shard(static_cast<uint32_t>(state->shard_id))
+                            : nullptr;
+                        if (shard && state->serving_guild_id) {
                             // Pin voiceconn before any work — get_voice returns
                             // a raw ptr whose owning shared_ptr can be erased by
                             // disconnect_voice_internal on the gateway thread at
@@ -405,7 +429,7 @@ void BotRouter::startBgTask() {
                             // voiceconn and its unique_ptr<voiceclient> alive
                             // for the duration of this scope.
                             std::shared_ptr<dpp::voiceconn> local_voice_conn;
-                            if (auto* raw = state->client->get_voice(state->serving_guild_id.value())) {
+                            if (auto* raw = shard->get_voice(state->serving_guild_id.value())) {
                                 try {
                                     local_voice_conn = raw->shared_from_this();
                                 } catch (const std::bad_weak_ptr&) {
@@ -444,7 +468,14 @@ void BotRouter::startBgTask() {
                                     state->idle_count++;
                                     if (state->idle_count >= max_idle_count) {
                                         spdlog::info("Voice connection idle for too long, disconnecting...");
-                                        state->client->disconnect_voice(state->serving_guild_id.value());
+                                        // Re-resolve the shard for the
+                                        // disconnect call too — `shard` we
+                                        // grabbed above could legitimately
+                                        // have been recycled by now, but in
+                                        // practice this branch fires right
+                                        // after a successful get_voice so
+                                        // reusing the local is safe.
+                                        shard->disconnect_voice(state->serving_guild_id.value());
                                         state->idle_count = 0;
                                         tool_->clearAllAudio();
                                         state->init = true;
@@ -457,12 +488,12 @@ void BotRouter::startBgTask() {
                         }
                     } catch (const dpp::voice_exception& e) {
                         spdlog::error("dpp voice exception in bg task: {}", e.what());
-                        state->client = nullptr;
+                        state->shard_id = -1;
                         state->serving_guild_id = std::nullopt;
                         state->sleep_duration = cycle_us;
                     } catch (...) {
                         spdlog::error("Unknown exception in bg task.");
-                        state->client = nullptr;
+                        state->shard_id = -1;
                         state->serving_guild_id = std::nullopt;
                         state->sleep_duration = cycle_us;
                     }
