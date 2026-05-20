@@ -153,33 +153,6 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
     pbot_->on_form_submit(this->getCmdRouterFunction<dpp::form_submit_t>());
     pbot_->on_select_click(this->getCmdRouterFunction<dpp::select_click_t>());
 
-    pbot_->on_autocomplete([this, bot = pbot_, tool = tool_](const dpp::autocomplete_t& ev) {
-        if (ev.name != "joineffect") return;
-        auto sched = ppool_->get_scheduler();
-        auto pool_keepalive = ppool_;
-        auto work = withErrorLog(
-            stdexec::schedule(sched)
-            | stdexec::then([ev, bot, tool, pool_keepalive]() {
-                for (const auto& opt : ev.options) {
-                    if (!opt.focused || opt.name != "clip_name") continue;
-                    std::string query;
-                    if (std::holds_alternative<std::string>(opt.value)) {
-                        query = std::get<std::string>(opt.value);
-                    }
-                    constexpr int max_choices = 25;
-                    auto matches = tool->searchSoundpadByName(query, max_choices);
-                    dpp::interaction_response resp(dpp::ir_autocomplete_reply);
-                    for (const auto& [id, name] : matches) {
-                        resp.add_autocomplete_choice(dpp::command_option_choice(name, name));
-                    }
-                    bot->interaction_response_create(ev.command.id, ev.command.token, resp);
-                    return;
-                }
-            }),
-            "autocomplete");
-        exec::start_detached(std::move(work));
-    });
-
     pbot_->on_voice_client_platform([this](const dpp::voice_client_platform_t& ev) {
         // Fires when another user's RTC is ready in a channel the bot is in.
         // If we have a pending join effect for that user, play it 200ms later.
@@ -680,17 +653,8 @@ void BotRouter::setCmds() {
         dpp::slashcommand("joineffect", "Bind a soundpad clip to play when a user joins voice.", pbot_->me.id)
             .add_localization("zh-CN", "进场音效", "为用户绑定加入语音频道时播放的音效。")
             .add_option(
-                dpp::command_option(dpp::co_user, "user", "User to watch", false)
+                dpp::command_option(dpp::co_user, "user", "User to watch", true)
                     .add_localization("zh-CN", "用户", "要监听的用户")
-            )
-            .add_option(
-                dpp::command_option(dpp::co_string, "clip_name", "Soundpad clip name (omit to remove binding)", false)
-                    .add_localization("zh-CN", "音效名称", "音效板片段名称 (留空则取消绑定)")
-                    .set_auto_complete(true)
-            )
-            .add_option(
-                dpp::command_option(dpp::co_boolean, "list", "List bindings in this server", false)
-                    .add_localization("zh-CN", "列表", "列出本服务器的绑定")
             ),
         new JoinEffectCommand(tool_)
     );
