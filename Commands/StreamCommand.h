@@ -33,7 +33,11 @@ public:
             co_return;
         }
 
+        // Acknowledge with a concrete message. This doubles as the
+        // interaction's edited response so Discord doesn't time out ("The
+        // application did not respond") on the fast cache-hit path.
         event.edit_original_response(dpp::message("Fetching sound from URL..."));
+        auto fetching_edit_at = std::chrono::steady_clock::now();
 
         // Offload blocking I/O to a separate thread
         auto tool = tool_interface_;
@@ -50,6 +54,21 @@ public:
         }
 
         auto tool_res = future.get();
+
+        // Ensure enough wall-clock time separates the "Fetching..." PATCH from
+        // the terminal edit. On a PCM cache hit the fetch returns in <100ms,
+        // so the two same-message PATCHes would otherwise be queued back-to-
+        // back and Discord can apply them out of order — leaving the message
+        // stuck on "Fetching...". A short floor (well under the 100ms poll
+        // cadence above is not enough; use ~700ms) guarantees ordering. On a
+        // slow download this is already satisfied and adds no delay.
+        constexpr auto MIN_EDIT_SPACING = std::chrono::milliseconds(700);
+        auto elapsed = std::chrono::steady_clock::now() - fetching_edit_at;
+        if (elapsed < MIN_EDIT_SPACING) {
+            co_await (exec::schedule_after(timed_sched, MIN_EDIT_SPACING - elapsed)
+                      | stdexec::continues_on(pool_sched));
+        }
+
         if (!tool_res.success || !tool_res.data.has_value()) {
             event.edit_original_response(dpp::message("Failed to fetch with error code " +
                         std::to_string(tool_res.error_code) + ": " + tool_res.message));

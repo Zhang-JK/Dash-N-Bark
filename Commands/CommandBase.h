@@ -77,13 +77,28 @@ protected:
             event.thinking();
         }
 
-        // Helper: re-resolve voiceconn and pin via shared_from_this so the
-        // unique_ptr<discord_voice_client> can't be freed while we touch it.
-        // get_voice returns a raw ptr whose owning shared_ptr lives in
-        // discord_client::connecting_voice_channels and can be erased by
-        // disconnect_voice_internal at any moment on the gateway thread.
+        // Capture the shard *id* from the interaction's originating client
+        // once. event.from() itself returns a discord_client* whose lifetime
+        // is bounded by the original DPP callback; DPP may recycle the shard
+        // (delete + new) across any co_await suspension here, so caching the
+        // pointer would UAF on resume. The id is stable across recycles.
+        uint32_t shard_id = 0;
+        bool have_shard_id = false;
+        if (auto* from = event.from()) {
+            shard_id = from->shard_id;
+            have_shard_id = true;
+        }
+
+        // Helper: re-resolve the shard, then voiceconn, then pin via
+        // shared_from_this. Returns nullptr if either lookup fails (shard
+        // currently reconnecting / no voice connection / voiceconn being
+        // destroyed). Called fresh on every iteration so we never reuse a
+        // pointer that might have been freed.
         auto pin_vc = [&]() -> std::shared_ptr<dpp::voiceconn> {
-            auto* raw = event.from()->get_voice(event.command.guild_id);
+            if (!have_shard_id || !event.owner) return nullptr;
+            auto* shard = event.owner->get_shard(shard_id);
+            if (!shard) return nullptr;
+            auto* raw = shard->get_voice(event.command.guild_id);
             if (!raw) return nullptr;
             try {
                 return raw->shared_from_this();
