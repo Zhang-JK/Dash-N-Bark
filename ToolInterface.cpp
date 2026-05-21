@@ -12,6 +12,8 @@
 
 #include <utility>
 
+#include "Trace.h"
+
 ToolInterface::ToolInterface(std::string base, std::shared_ptr<exec::static_thread_pool> pool)
 : base_path_(std::move(base)), ppool_(std::move(pool))
 {
@@ -59,6 +61,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playAudioFromFile(std::string p
 
 
 ToolInterface::ToolInvokeResult<> ToolInterface::fetchAndEnqueuePlaylist(const std::string& url, int volume) {
+    DNB_TRACE_SCOPE("ToolInterface::fetchAndEnqueuePlaylist");
     if (volume < 1 || volume > 200) {
         return {
             .success = false,
@@ -126,11 +129,13 @@ ToolInterface::ToolInvokeResult<> ToolInterface::clearAllAudio()
 
 std::optional<AudioMixer::AudioClip> ToolInterface::stepAudioMixer(size_t step_size) const
 {
+    DNB_TRACE_SCOPE("ToolInterface::stepAudioMixer");
     return audio_mixer_->step(step_size);
 }
 
 ToolInterface::ToolInvokeResult<std::optional<AudioMixer::AudioClip>> ToolInterface::fetchSoundFromUrl(const std::string& url)
 {
+    DNB_TRACE_SCOPE("ToolInterface::fetchSoundFromUrl");
     auto res = fetch_manager_->fetchFromURL(url);
     return {
         .success = res.isValid(),
@@ -184,6 +189,7 @@ ToolInterface::ToolInvokeResult<std::optional<std::map<int, std::string>>> ToolI
 }
 
 ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, int volume) {
+    DNB_TRACE_SCOPE("ToolInterface::playSoundpadClip");
     volume = std::clamp(volume, 1, 200);
     auto res = sound_pad_manager_->loadAudioClip(clip_id);
     if (!res) {
@@ -201,6 +207,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClip(int clip_id, i
 }
 
 ToolInterface::ToolInvokeResult<> ToolInterface::playSoundpadClipByName(const std::string& clip_name, int volume) {
+    DNB_TRACE_SCOPE("ToolInterface::playSoundpadClipByName");
     volume = std::clamp(volume, 1, 200);
     auto res = sound_pad_manager_->loadAudioClip(clip_name);
     if (!res) {
@@ -248,6 +255,7 @@ std::vector<std::pair<std::string, std::string>> ToolInterface::listJoinEffects(
 }
 
 ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::string user_id, int duration_seconds, AudioMixer::VoiceChanger::VoicePreset voice_preset) {
+    DNB_TRACE_SCOPE("ToolInterface::initRecordingService");
     std::shared_ptr<AudioMixer::RecorderSession> session = nullptr;
     {
         std::lock_guard<std::mutex> lock(recorder_mutex_);
@@ -272,6 +280,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
                 exec::schedule_after(timed_sched, std::chrono::milliseconds(60))
                 | stdexec::continues_on(sched)
                 | stdexec::then([session, end_time, this] {
+                    DNB_TRACE_SCOPE("RecorderSession::streamAudio");
                     spdlog::debug("Stream left: {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(end_time - std::chrono::steady_clock::now()).count());
                     auto local_clip = session->streamAudio();
                     if (local_clip) {
@@ -312,6 +321,7 @@ ToolInterface::ToolInvokeResult<> ToolInterface::initRecordingService(std::strin
 }
 
 void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t size, const std::string& user_id) {
+    DNB_TRACE_SCOPE("ToolInterface::recordingVoiceCallback");
     // First, grab a shared_ptr to the session under recorder_mutex_, then
     // release the lock before calling any RecorderSession methods to avoid
     // potential lock-order inversions.
@@ -343,9 +353,11 @@ void ToolInterface::recordingVoiceCallback(std::vector<uint8_t> data, size_t siz
 }
 
 std::vector<StreamFetch::FetchManager::SearchResult> ToolInterface::search(const std::string& keyword, int max_results) {
+    DNB_TRACE_SCOPE("ToolInterface::search");
     return fetch_manager_->search(keyword, max_results);
 }
 
 std::vector<StreamFetch::FetchManager::SearchResult> ToolInterface::searchByPlatform(const std::string& keyword, const std::string& platform, int max_results) {
+    DNB_TRACE_SCOPE("ToolInterface::searchByPlatform");
     return fetch_manager_->searchByPlatform(keyword, platform, max_results);
 }

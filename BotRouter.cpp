@@ -8,12 +8,9 @@
 #include <exec/task.hpp>
 #include <filesystem>
 #include <fstream>
-#ifndef NDEBUG
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
 
 #include "BotRouter.h"
+#include "Trace.h"
 
 #include "Commands/JoinCommand.h"
 #include "Commands/LeaveCommand.h"
@@ -107,62 +104,16 @@ namespace {
             | stdexec::upon_stopped([]() noexcept {});
     }
 
-#ifndef NDEBUG
-    // Per-pool-worker enter/exit tracer. tid matches CrashHandler's SIGUSR1
-    // dump format so the rolling log and a thread dump can be cross-referenced
-    // by tid. The shared TraceState guarantees exactly one exit line per task —
-    // its destructor logs "dropped" if the pipeline was torn down before
-    // completing through value/error/stopped (e.g. process shutdown).
-    template<typename Sender>
-    auto withPoolTrace(Sender&& s, std::string tag) {
-        struct TraceState {
-            std::string tag;
-            std::chrono::steady_clock::time_point start{};
-            std::atomic<bool> exit_logged{false};
-
-            static long tid() noexcept {
-                return static_cast<long>(::syscall(SYS_gettid));
-            }
-
-            void logExit(const char* channel) noexcept {
-                if (exit_logged.exchange(true, std::memory_order_acq_rel)) return;
-                long long dur_us = 0;
-                if (start.time_since_epoch().count() != 0) {
-                    dur_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - start).count();
-                }
-                spdlog::trace("[pool-trace] exit  tid={} task={} dur_us={} channel={}",
-                              tid(), tag, dur_us, channel);
-            }
-
-            ~TraceState() { logExit("dropped"); }
-        };
-        auto st = std::make_shared<TraceState>();
-        st->tag = std::move(tag);
-        return stdexec::just()
-            | stdexec::then([st]() noexcept {
-                st->start = std::chrono::steady_clock::now();
-                spdlog::trace("[pool-trace] enter tid={} task={}",
-                              TraceState::tid(), st->tag);
-            })
-            | stdexec::let_value([s = std::forward<Sender>(s)]() mutable {
-                return std::move(s);
-            })
-            | stdexec::then([st](auto&&...) noexcept { st->logExit("value"); })
-            | stdexec::upon_error([st](auto&&) noexcept { st->logExit("error"); })
-            | stdexec::upon_stopped([st]() noexcept { st->logExit("stopped"); });
-    }
-#endif
-
-    // Schedule a sender on the pool and detach. In debug builds the sender
-    // is wrapped with withPoolTrace; the tag is ignored in release.
+    // Schedule a sender on the pool and detach. With -DDNB_TRACE_ENABLED the
+    // sender is wrapped with dnb_trace::withPoolTrace; the tag is ignored
+    // otherwise.
     template<typename Sender>
     void launchHandlerOnPool(std::shared_ptr<exec::static_thread_pool> pool, Sender&& s,
                              [[maybe_unused]] std::string tag = {}) {
         auto sched = pool->get_scheduler();
-#ifndef NDEBUG
+#ifdef DNB_TRACE_ENABLED
         auto work = withErrorLog(
-            stdexec::starts_on(sched, withPoolTrace(std::forward<Sender>(s), std::move(tag))),
+            stdexec::starts_on(sched, dnb_trace::withPoolTrace(std::forward<Sender>(s), std::move(tag))),
             "command coroutine");
 #else
         auto work = withErrorLog(stdexec::starts_on(sched, std::forward<Sender>(s)),
@@ -239,6 +190,7 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
             exec::schedule_after(timed_sched, JOIN_EFFECT_PLATFORM_DELAY)
             | stdexec::continues_on(pool_sched)
             | stdexec::then([=]() {
+                DNB_TRACE_SCOPE("join_effect_platform");
                 if (stop_token.stop_requested()) return;
                 auto res = tool->playSoundpadClipByName(clip_name, 100);
                 if (!res.success) {
@@ -292,6 +244,7 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
         auto work = withErrorLog(
             stdexec::schedule(sched)
             | stdexec::then([this, guild_id, user_id, channel_id, shard_id, tool, self_bot, pool_keepalive]() {
+                DNB_TRACE_SCOPE("voice_state_update");
                 auto clip = tool->getJoinEffect(guild_id.str(), user_id.str());
                 if (!clip) return;
 
@@ -353,6 +306,7 @@ void BotRouter::armJoinEffect(dpp::snowflake user_id, std::string clip_name,
         exec::schedule_after(timed_sched, fallback)
         | stdexec::continues_on(pool_sched)
         | stdexec::then([this, user_key, tool, stop_token]() {
+            DNB_TRACE_SCOPE("join_effect_fallback");
             if (stop_token.stop_requested()) return;
             std::string local_clip;
             {
@@ -434,6 +388,7 @@ void BotRouter::startBgTask() {
         auto work = withErrorLog(
             stdexec::schedule(sched)
             | stdexec::then([tool, data = std::move(data), size, user_id = std::move(user_id), pool_keepalive, inflight_guard]() mutable {
+                DNB_TRACE_SCOPE("voice_receive");
                 tool->recordingVoiceCallback(std::move(data), size, user_id);
             }),
             "voice_receive");
@@ -493,6 +448,7 @@ void BotRouter::startBgTask() {
                         | stdexec::continues_on(pool_sched);
                 })
                 | stdexec::then([this, state, token, step_size, cycle_us, target_buf_us, max_idle_count]() {
+                    DNB_TRACE_SCOPE("bg_ticker_tick");
                     if (token.stop_requested()) {
                         spdlog::debug("[Ticker] Cleaning up and stopping.");
                         return true;
@@ -790,6 +746,7 @@ auto BotRouter::getRegisterCmdFunction() -> std::function<void(const dpp::ready_
                     exec::schedule_after(timed_sched, CMD_REGISTER_INTERVAL)
                     | stdexec::continues_on(pool_sched)
                     | stdexec::then([items, idx, local_bot]() {
+                        DNB_TRACE_SCOPE("cmd_register_tick");
                         size_t i = idx->fetch_add(1);
                         if (i >= items->size()) return true;
                         const auto& cmd_name = (*items)[i].first;
