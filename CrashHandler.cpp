@@ -115,14 +115,14 @@ namespace {
     void per_thread_dump_handler(int /*sig*/, siginfo_t* /*info*/, void* /*uc*/) {
         int fd = g_dump_fd.load(std::memory_order_acquire);
         if (fd < 0) {
-            g_dump_acks.fetch_add(1, std::memory_order_release);
+            g_dump_acks.fetch_add(1, std::memory_order_acq_rel);
             return;
         }
         char header[128];
         std::snprintf(header, sizeof(header), "--- thread tid=%d ---",
                       static_cast<int>(gettid_compat()));
         dump_trace_to_fd(fd, header);
-        g_dump_acks.fetch_add(1, std::memory_order_release);
+        g_dump_acks.fetch_add(1, std::memory_order_acq_rel);
     }
 
     // Iterate /proc/self/task to enumerate every thread in the process and
@@ -211,11 +211,14 @@ namespace CrashHandler {
         } catch (...) {}
 
         // Async-signal: switch to a separate stack so the handler can still
-        // run when SIGSEGV was caused by stack overflow. Size picked to be
-        // comfortably above MINSIGSTKSZ on every glibc version (it's a
-        // sysconf() call on glibc 2.34+, not a constant, so we hard-code).
+        // run when SIGSEGV was caused by stack overflow. sigaltstack is
+        // per-thread and we only install on the calling (main) thread, so
+        // worker-thread stack overflows still crash on their own stack and
+        // the handler may itself fault — acceptable since the watchdog will
+        // restart us regardless. Size picked comfortably above MINSIGSTKSZ
+        // (a sysconf() call on glibc 2.34+, not a constant, so hard-coded).
         static constexpr size_t ALT_STACK_SIZE = 64 * 1024;
-        static thread_local char alt_stack_storage[ALT_STACK_SIZE];
+        static char alt_stack_storage[ALT_STACK_SIZE];
         stack_t ss{};
         ss.ss_sp = alt_stack_storage;
         ss.ss_size = ALT_STACK_SIZE;

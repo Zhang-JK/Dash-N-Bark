@@ -8,6 +8,10 @@
 #include <exec/task.hpp>
 #include <filesystem>
 #include <fstream>
+#ifndef NDEBUG
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 #include "BotRouter.h"
 
@@ -103,13 +107,67 @@ namespace {
             | stdexec::upon_stopped([]() noexcept {});
     }
 
-    // Schedule a coroutine onto the given pool and detach. Used by every
-    // handlerExecWrapper specialization to launch command coroutines.
+#ifndef NDEBUG
+    // Per-pool-worker enter/exit tracer. tid matches CrashHandler's SIGUSR1
+    // dump format so the rolling log and a thread dump can be cross-referenced
+    // by tid. The shared TraceState guarantees exactly one exit line per task —
+    // its destructor logs "dropped" if the pipeline was torn down before
+    // completing through value/error/stopped (e.g. process shutdown).
     template<typename Sender>
-    void launchHandlerOnPool(std::shared_ptr<exec::static_thread_pool> pool, Sender&& s) {
+    auto withPoolTrace(Sender&& s, std::string tag) {
+        struct TraceState {
+            std::string tag;
+            std::chrono::steady_clock::time_point start{};
+            std::atomic<bool> exit_logged{false};
+
+            static long tid() noexcept {
+                return static_cast<long>(::syscall(SYS_gettid));
+            }
+
+            void logExit(const char* channel) noexcept {
+                if (exit_logged.exchange(true, std::memory_order_acq_rel)) return;
+                long long dur_us = 0;
+                if (start.time_since_epoch().count() != 0) {
+                    dur_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - start).count();
+                }
+                spdlog::trace("[pool-trace] exit  tid={} task={} dur_us={} channel={}",
+                              tid(), tag, dur_us, channel);
+            }
+
+            ~TraceState() { logExit("dropped"); }
+        };
+        auto st = std::make_shared<TraceState>();
+        st->tag = std::move(tag);
+        return stdexec::just()
+            | stdexec::then([st]() noexcept {
+                st->start = std::chrono::steady_clock::now();
+                spdlog::trace("[pool-trace] enter tid={} task={}",
+                              TraceState::tid(), st->tag);
+            })
+            | stdexec::let_value([s = std::forward<Sender>(s)]() mutable {
+                return std::move(s);
+            })
+            | stdexec::then([st](auto&&...) noexcept { st->logExit("value"); })
+            | stdexec::upon_error([st](auto&&) noexcept { st->logExit("error"); })
+            | stdexec::upon_stopped([st]() noexcept { st->logExit("stopped"); });
+    }
+#endif
+
+    // Schedule a sender on the pool and detach. In debug builds the sender
+    // is wrapped with withPoolTrace; the tag is ignored in release.
+    template<typename Sender>
+    void launchHandlerOnPool(std::shared_ptr<exec::static_thread_pool> pool, Sender&& s,
+                             [[maybe_unused]] std::string tag = {}) {
         auto sched = pool->get_scheduler();
+#ifndef NDEBUG
+        auto work = withErrorLog(
+            stdexec::starts_on(sched, withPoolTrace(std::forward<Sender>(s), std::move(tag))),
+            "command coroutine");
+#else
         auto work = withErrorLog(stdexec::starts_on(sched, std::forward<Sender>(s)),
                                  "command coroutine");
+#endif
         exec::start_detached(std::move(work));
     }
 }
@@ -829,20 +887,20 @@ void BotRouter::handlerExecWrapper(CommandBase* handler, const CmdType& event, s
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::slashcommand_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->execute(event, bot));
+    launchHandlerOnPool(ppool_, handler->execute(event, bot), event.command.get_command_name());
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::button_click_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->button(event, bot));
+    launchHandlerOnPool(ppool_, handler->button(event, bot), event.custom_id);
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::form_submit_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->form_submit(event, bot));
+    launchHandlerOnPool(ppool_, handler->form_submit(event, bot), event.custom_id);
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::select_click_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->select(event, bot));
+    launchHandlerOnPool(ppool_, handler->select(event, bot), event.custom_id);
 }
