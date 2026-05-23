@@ -6,6 +6,8 @@
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
 #endif
 
+#include <cstdio>
+
 #include <dpp/dpp.h>
 #include <spdlog/spdlog.h>
 #include <exec/static_thread_pool.hpp>
@@ -22,7 +24,21 @@
 #define GLOBAL_CONFIG_PATH "config.json"
 #endif
 
+namespace {
+constexpr const char* kBanner =
+    R"(
+  ____            _       _   _       ____             _
+ |  _ \  __ _ ___| |__   | \ | |     | __ )  __ _ _ __| | __
+ | | | |/ _` / __| '_ \  |  \| |_____|  _ \ / _` | '__| |/ /
+ | |_| | (_| \__ \ | | | | |\  |_____| |_) | (_| | |  |   <
+ |____/ \__,_|___/_| |_| |_| \_|     |____/ \__,_|_|  |_|\_\
+)";
+}
+
 int main() {
+    std::fputs(kBanner, stdout);
+    std::fflush(stdout);
+
     // Install crash + deadlock-trace signal handlers first so we capture even
     // very-early crashes (e.g. during config parsing).
     CrashHandler::install();
