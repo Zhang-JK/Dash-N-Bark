@@ -22,19 +22,30 @@ BACKOFF_MAX=300      # seconds
 # Liveness heartbeat tuning. The bot writes two files:
 #   logs/heartbeat.gateway  — touched on DPP's IO thread every 10s
 #   logs/heartbeat.pool     — touched from the worker-pool ticker every ~5s
-# If either file's mtime falls behind HEARTBEAT_STALE_SECS, we conclude the
-# bot is stuck and kill it; the outer restart loop then takes over.
+# If either file's mtime falls behind HEARTBEAT_STALE_SECS, we treat the bot
+# as stuck. Before killing, we send SIGUSR1 so the bot's CrashHandler can
+# write a per-thread stack trace to logs/deadlock_<pid>_<ts>.trace, then
+# proceed with SIGTERM + SIGKILL fallback. The outer restart loop takes over.
 HEARTBEAT_GATEWAY="$LOG_DIR/heartbeat.gateway"
 HEARTBEAT_POOL="$LOG_DIR/heartbeat.pool"
 HEARTBEAT_STALE_SECS=60
 HEARTBEAT_CHECK_INTERVAL=15      # seconds between staleness polls
 HEARTBEAT_GRACE_SECS=45          # don't enforce until this long after start
                                  # (gives the bot time to register commands etc.)
+# Time we wait between SIGUSR1 (dump request) and SIGTERM. The bot's
+# deadlock handler iterates /proc/self/task and signals each peer, so this
+# needs to be long enough for all threads to ack — 3 seconds is plenty.
+DEADLOCK_DUMP_GRACE_SECS=3
 
 mkdir -p "$LOG_DIR"
 echo $$ > "$PIDFILE"
 
 export LD_LIBRARY_PATH="$ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Optional: enable kernel core dumps so post-mortem inspection is possible
+# even if cpptrace's in-process handler crashes. Disabled by default since
+# core files are large; uncomment if needed.
+# ulimit -c unlimited
 
 child_pid=0
 monitor_pid=0
@@ -51,17 +62,17 @@ heartbeat_fresh() {
 }
 
 # Background monitor: polls heartbeat files while the bot is running and kills
-# the bot if either heartbeat goes stale. Runs as long as the child PID it was
-# launched with is still alive.
+# the bot if either heartbeat goes stale, after first requesting a per-thread
+# trace dump via SIGUSR1. Self-exits when the target pid is gone.
 monitor_heartbeats() {
     local target_pid="$1"
     local started_at="$2"
     while kill -0 "$target_pid" 2>/dev/null; do
         sleep "$HEARTBEAT_CHECK_INTERVAL"
-        # Grace period after startup — files may not exist yet during the first
-        # few seconds while DPP is connecting.
         local now
         now=$(date +%s)
+        # Grace period after startup — files may not exist yet while DPP is
+        # still connecting / registering commands.
         if [ $(( now - started_at )) -lt "$HEARTBEAT_GRACE_SECS" ]; then
             continue
         fi
@@ -73,7 +84,17 @@ monitor_heartbeats() {
             stale="${stale:+$stale,}pool"
         fi
         if [ -n "$stale" ]; then
-            echo "[watchdog] $(date -Is) heartbeat stale ($stale), killing pid=$target_pid" \
+            echo "[watchdog] $(date -Is) heartbeat stale ($stale), requesting thread dump from pid=$target_pid" \
+                | tee -a "$LOG_DIR/watchdog.log" >&2
+            # Ask the bot to dump per-thread stack traces. The handler writes
+            # logs/deadlock_<pid>_<ts>.trace and returns without exiting, so
+            # give it a short window to finish before escalating. If the
+            # process is so wedged it can't even service SIGUSR1, we proceed
+            # anyway — the kill below will still take effect.
+            kill -USR1 "$target_pid" 2>/dev/null || true
+            sleep "$DEADLOCK_DUMP_GRACE_SECS"
+
+            echo "[watchdog] $(date -Is) killing pid=$target_pid" \
                 | tee -a "$LOG_DIR/watchdog.log" >&2
             # SIGTERM first so spdlog can flush; SIGKILL after a short grace.
             kill -TERM "$target_pid" 2>/dev/null || true

@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "BotRouter.h"
+#include "Trace.h"
 
 #include "Commands/JoinCommand.h"
 #include "Commands/LeaveCommand.h"
@@ -41,9 +42,11 @@ namespace {
     constexpr int MAX_VOICE_RECV_INFLIGHT = 32;
 
     // ---- liveness watchdog --------------------------------------------------
-    // Heartbeat cadences. The watchdog script tolerates files older than its
-    // own staleness threshold (currently 60s — see scripts/watchdog.sh). We
-    // beat much more frequently than that so transient scheduling jitter
+    // Two heartbeat files are touched on independent threads (gateway IO and
+    // worker pool). If either falls behind the watchdog's staleness threshold
+    // (currently 60s — see scripts/watchdog.sh), the watchdog sends SIGUSR1
+    // so CrashHandler dumps per-thread stack traces, then kills us. We beat
+    // much more frequently than the threshold so transient scheduling jitter
     // doesn't trip a false restart.
     constexpr uint64_t GATEWAY_HEARTBEAT_SECS = 10;       // DPP timer in seconds
     constexpr auto POOL_HEARTBEAT_INTERVAL = std::chrono::seconds(5);
@@ -54,10 +57,10 @@ namespace {
     constexpr const char* HEARTBEAT_POOL_FILE = "logs/heartbeat.pool";
 
     // Atomically refresh a heartbeat file: write the current unix timestamp
-    // to logs/<name>.tmp then rename over the target so a watchdog stat()
-    // can never observe a half-written file. Failure is silent — heartbeats
-    // are best-effort; if the filesystem is broken the watchdog will detect
-    // the lack of mtime updates and restart us, which is the right outcome.
+    // to <path>.tmp then rename over the target so a watchdog stat() can
+    // never observe a half-written file. Failure is silent — heartbeats are
+    // best-effort; if the filesystem is broken the watchdog detects the
+    // missing mtime updates and restarts us, which is the right outcome.
     void writeHeartbeat(const char* path) noexcept {
         try {
             std::error_code ec;
@@ -101,13 +104,21 @@ namespace {
             | stdexec::upon_stopped([]() noexcept {});
     }
 
-    // Schedule a coroutine onto the given pool and detach. Used by every
-    // handlerExecWrapper specialization to launch command coroutines.
+    // Schedule a sender on the pool and detach. With -DDNB_TRACE_ENABLED the
+    // sender is wrapped with dnb_trace::withPoolTrace; the tag is ignored
+    // otherwise.
     template<typename Sender>
-    void launchHandlerOnPool(std::shared_ptr<exec::static_thread_pool> pool, Sender&& s) {
+    void launchHandlerOnPool(std::shared_ptr<exec::static_thread_pool> pool, Sender&& s,
+                             [[maybe_unused]] std::string tag = {}) {
         auto sched = pool->get_scheduler();
+#ifdef DNB_TRACE_ENABLED
+        auto work = withErrorLog(
+            stdexec::starts_on(sched, dnb_trace::withPoolTrace(std::forward<Sender>(s), std::move(tag))),
+            "command coroutine");
+#else
         auto work = withErrorLog(stdexec::starts_on(sched, std::forward<Sender>(s)),
                                  "command coroutine");
+#endif
         exec::start_detached(std::move(work));
     }
 }
@@ -179,6 +190,7 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
             exec::schedule_after(timed_sched, JOIN_EFFECT_PLATFORM_DELAY)
             | stdexec::continues_on(pool_sched)
             | stdexec::then([=]() {
+                DNB_TRACE_SCOPE("join_effect_platform");
                 if (stop_token.stop_requested()) return;
                 auto res = tool->playSoundpadClipByName(clip_name, 100);
                 if (!res.success) {
@@ -232,6 +244,7 @@ BotRouter::BotRouter(const std::string& botToken, const std::string& workDir)
         auto work = withErrorLog(
             stdexec::schedule(sched)
             | stdexec::then([this, guild_id, user_id, channel_id, shard_id, tool, self_bot, pool_keepalive]() {
+                DNB_TRACE_SCOPE("voice_state_update");
                 auto clip = tool->getJoinEffect(guild_id.str(), user_id.str());
                 if (!clip) return;
 
@@ -293,6 +306,7 @@ void BotRouter::armJoinEffect(dpp::snowflake user_id, std::string clip_name,
         exec::schedule_after(timed_sched, fallback)
         | stdexec::continues_on(pool_sched)
         | stdexec::then([this, user_key, tool, stop_token]() {
+            DNB_TRACE_SCOPE("join_effect_fallback");
             if (stop_token.stop_requested()) return;
             std::string local_clip;
             {
@@ -336,10 +350,10 @@ BotRouter::~BotRouter() {
 void BotRouter::startBgTask() {
     using namespace std::chrono;
 
-    // Gateway liveness heartbeat. Fires on DPP's IO thread, which proves
-    // the websocket pump is still draining events. If the gateway is
-    // deadlocked or stuck reconnecting, this timer stops firing and the
-    // watchdog script restarts us.
+    // Gateway liveness heartbeat. Fires on DPP's IO thread, proving the
+    // websocket pump is still draining events. If the gateway deadlocks or
+    // is stuck reconnecting, this timer stops firing and the watchdog
+    // restarts us (sending SIGUSR1 for a thread dump first).
     pbot_->start_timer([](dpp::timer) {
         writeHeartbeat(HEARTBEAT_GATEWAY_FILE);
     }, GATEWAY_HEARTBEAT_SECS);
@@ -374,6 +388,7 @@ void BotRouter::startBgTask() {
         auto work = withErrorLog(
             stdexec::schedule(sched)
             | stdexec::then([tool, data = std::move(data), size, user_id = std::move(user_id), pool_keepalive, inflight_guard]() mutable {
+                DNB_TRACE_SCOPE("voice_receive");
                 tool->recordingVoiceCallback(std::move(data), size, user_id);
             }),
             "voice_receive");
@@ -433,6 +448,7 @@ void BotRouter::startBgTask() {
                         | stdexec::continues_on(pool_sched);
                 })
                 | stdexec::then([this, state, token, step_size, cycle_us, target_buf_us, max_idle_count]() {
+                    DNB_TRACE_SCOPE("bg_ticker_tick");
                     if (token.stop_requested()) {
                         spdlog::debug("[Ticker] Cleaning up and stopping.");
                         return true;
@@ -440,9 +456,9 @@ void BotRouter::startBgTask() {
                     // Pool liveness heartbeat. This tick body running at all
                     // proves the worker pool + timed scheduler are healthy;
                     // throttle the file write so we don't churn the disk every
-                    // 60ms. If this loop deadlocks (e.g. a worker stuck in a
-                    // tool call), the file goes stale and the watchdog will
-                    // restart us.
+                    // 60ms. If the worker pool deadlocks (e.g. a mutex inversion
+                    // in a tool call), the file goes stale and the watchdog
+                    // sends SIGUSR1 for a thread dump, then restarts us.
                     auto now_steady = steady_clock::now();
                     if (now_steady - state->last_pool_beat >= POOL_HEARTBEAT_INTERVAL) {
                         writeHeartbeat(HEARTBEAT_POOL_FILE);
@@ -730,6 +746,7 @@ auto BotRouter::getRegisterCmdFunction() -> std::function<void(const dpp::ready_
                     exec::schedule_after(timed_sched, CMD_REGISTER_INTERVAL)
                     | stdexec::continues_on(pool_sched)
                     | stdexec::then([items, idx, local_bot]() {
+                        DNB_TRACE_SCOPE("cmd_register_tick");
                         size_t i = idx->fetch_add(1);
                         if (i >= items->size()) return true;
                         const auto& cmd_name = (*items)[i].first;
@@ -827,20 +844,20 @@ void BotRouter::handlerExecWrapper(CommandBase* handler, const CmdType& event, s
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::slashcommand_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->execute(event, bot));
+    launchHandlerOnPool(ppool_, handler->execute(event, bot), event.command.get_command_name());
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::button_click_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->button(event, bot));
+    launchHandlerOnPool(ppool_, handler->button(event, bot), event.custom_id);
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::form_submit_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->form_submit(event, bot));
+    launchHandlerOnPool(ppool_, handler->form_submit(event, bot), event.custom_id);
 }
 
 template<>
 void BotRouter::handlerExecWrapper(CommandBase* handler, const dpp::select_click_t& event, std::shared_ptr<dpp::cluster> bot) {
-    launchHandlerOnPool(ppool_, handler->select(event, bot));
+    launchHandlerOnPool(ppool_, handler->select(event, bot), event.custom_id);
 }
