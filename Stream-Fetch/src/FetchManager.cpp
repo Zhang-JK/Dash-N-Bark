@@ -9,6 +9,7 @@
 #include <sstream>
 #include <regex>
 #include <ctime>
+#include <chrono>
 #include <iomanip>
 #include <thread>
 #include <sys/wait.h>
@@ -314,7 +315,7 @@ namespace StreamFetch {
                     // while, but a stuck CDN must not hang us forever.
                     cpr::Timeout{180000},
                     // Stall guard: fewer than 1 KB/s for 30s -> bail out.
-                    cpr::LowSpeed{1024, 30});
+                    cpr::LowSpeed{1024, std::chrono::seconds{30}});
                 if (download_response.error.code == cpr::ErrorCode::OPERATION_TIMEDOUT) {
                     spdlog::warn("Bilibili audio download stalled/timed out for {}", url);
                     fout.close();
