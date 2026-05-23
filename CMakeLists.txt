@@ -73,7 +73,11 @@ add_executable(${PROJECT_NAME}
         Commands/JoinEffectCommand.h
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE dpp TBB::tbb stdexec audio_mixer spdlog stream_fetch nlohmann_json cpptrace::cpptrace)
-target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20)
+# stdexec's __sexpr lives in an anonymous namespace by design, so any coroutine
+# that builds a sender pipeline ends up with a synthesised Frame struct whose
+# fields have internal linkage. Our Commands/*.h coroutines only ever expand in
+# one TU each, so the ODR risk -Wsubobject-linkage flags doesn't apply.
+target_compile_options(${PROJECT_NAME} PRIVATE -fcoroutines -std=c++20 -Wno-subobject-linkage)
 # Export symbols into the dynamic table so cpptrace can resolve frame addresses
 # back to function names even in release builds where DWARF info is stripped.
 target_link_options(${PROJECT_NAME} PRIVATE -rdynamic)
