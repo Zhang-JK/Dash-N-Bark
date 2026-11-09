@@ -6,6 +6,7 @@
 #include <exec/start_detached.hpp>
 #include <exec/repeat_until.hpp>
 #include <exec/task.hpp>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 
@@ -370,8 +371,20 @@ void BotRouter::startBgTask() {
         int now_inflight = voice_recv_inflight_.fetch_add(1, std::memory_order_relaxed) + 1;
         if (now_inflight > MAX_VOICE_RECV_INFLIGHT) {
             voice_recv_inflight_.fetch_sub(1, std::memory_order_relaxed);
-            spdlog::warn("voice_receive backpressure: dropping packet (inflight={} > {})",
-                            now_inflight - 1, MAX_VOICE_RECV_INFLIGHT);
+            /* The courier can call this once per synthesized PLC frame. Logging
+             * every drop wrote ~45MB in a minute when a sequence gap walked the
+             * whole uint16 space. Keep a periodic warning so the condition is
+             * still visible. */
+            using clock = std::chrono::steady_clock;
+            static std::atomic<clock::rep> last_log_ticks{0};
+            constexpr auto log_interval = std::chrono::seconds(5);
+            const auto now_ticks = clock::now().time_since_epoch().count();
+            auto prev = last_log_ticks.load(std::memory_order_relaxed);
+            if (clock::duration(now_ticks - prev) >= log_interval
+                && last_log_ticks.compare_exchange_strong(prev, now_ticks, std::memory_order_relaxed)) {
+                spdlog::warn("voice_receive backpressure: dropping packet (inflight={} > {})",
+                                now_inflight - 1, MAX_VOICE_RECV_INFLIGHT);
+            }
             return;
         }
         auto sched = ppool_->get_scheduler();
