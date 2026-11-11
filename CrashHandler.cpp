@@ -24,6 +24,7 @@
 #include <cstring>
 #include <ctime>
 #include <dirent.h>
+#include <execinfo.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <mutex>
@@ -50,7 +51,16 @@ namespace {
     // multiple threads append their traces. SIGUSR2 handlers across threads
     // serialize on this; the small risk of priority inversion is acceptable
     // because we're already in a diagnostic-only path.
+    //
+    // Never hold this across cpptrace::generate_trace. That call allocates
+    // and can itself raise SIGSEGV. The crash handler also takes this mutex,
+    // so holding it turns a fault inside the dump into a stuck process and
+    // an empty crash file (seen on pid 3617604, 2026-11-11 23:37 HKT).
     std::mutex g_dump_mutex;
+
+    // Tid currently inside generate_trace. A nested signal on that same
+    // thread must not call cpptrace again; it writes a raw backtrace instead.
+    std::atomic<pid_t> g_tracing_tid{0};
 
     pid_t gettid_compat() {
         return static_cast<pid_t>(::syscall(SYS_gettid));
@@ -70,19 +80,57 @@ namespace {
         ::write(fd, s, std::strlen(s));
     }
 
+    // Addresses only. Used when we are already inside a dump and cannot
+    // safely call cpptrace again. backtrace_symbols_fd writes straight to fd.
+    void write_raw_backtrace(int fd) {
+        void* frames[48];
+        int n = ::backtrace(frames, 48);
+        if (n > 0) {
+            ::backtrace_symbols_fd(frames, n, fd);
+        } else {
+            write_str(fd, "<raw backtrace unavailable>\n");
+        }
+    }
+
     // Render a cpptrace::stacktrace to an open fd. cpptrace's own to_string()
     // already includes function names + file:line where available.
+    // The trace is built before g_dump_mutex is taken so a fault inside
+    // cpptrace can still be reported by the crash handler.
     void dump_trace_to_fd(int fd, const char* heading) {
-        std::lock_guard<std::mutex> lg(g_dump_mutex);
-        write_str(fd, heading);
-        write_str(fd, "\n");
+        pid_t self = gettid_compat();
+        pid_t expected = 0;
+        bool owned = g_tracing_tid.compare_exchange_strong(
+            expected, self, std::memory_order_acq_rel);
+        if (!owned && expected == self) {
+            write_str(fd, heading);
+            write_str(fd, "\n<re-entered trace dump>\n");
+            write_raw_backtrace(fd);
+            return;
+        }
+
+        std::string body;
         try {
             auto trace = cpptrace::generate_trace(/*skip=*/2);
-            auto s = trace.to_string(/*color=*/false);
-            ::write(fd, s.data(), s.size());
-            write_str(fd, "\n");
+            body = trace.to_string(/*color=*/false);
         } catch (...) {
-            write_str(fd, "<cpptrace failed to generate trace>\n");
+            body = "<cpptrace failed to generate trace>\n";
+        }
+
+        {
+            std::lock_guard<std::mutex> lg(g_dump_mutex);
+            write_str(fd, heading);
+            write_str(fd, "\n");
+            if (!body.empty()) {
+                ssize_t wrote = ::write(fd, body.data(), body.size());
+                (void)wrote;
+            }
+            write_str(fd, "\n");
+        }
+
+        if (owned) {
+            pid_t current = self;
+            g_tracing_tid.compare_exchange_strong(
+                current, static_cast<pid_t>(0), std::memory_order_acq_rel);
         }
     }
 
