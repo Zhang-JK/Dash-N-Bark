@@ -9,7 +9,9 @@ on:
 jobs:
   build:
     if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association))
-    runs-on: ubuntu-latest
+    # Must match the deploy host's Ubuntu release: binaries built on a newer
+    # image link against a glibc/OpenSSL the host does not have.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
