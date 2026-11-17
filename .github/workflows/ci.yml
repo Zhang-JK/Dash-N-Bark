@@ -12,6 +12,11 @@ jobs:
     # Must match the deploy host's Ubuntu release: binaries built on a newer
     # image link against a glibc/OpenSSL the host does not have.
     runs-on: ubuntu-24.04
+    # Back-to-back trunk merges must not deploy concurrently: overlapping
+    # kill/start sequences leave two watchdogs (and two bots) running.
+    concurrency:
+      group: ci-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,6 +91,13 @@ jobs:
             ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -p ${{ secrets.HOST_PORT }} ${{ secrets.HOST_USERNAME }}@${{ secrets.HOST_HOSTNAME }} << 'EOF' && break
               cd ~/deploys/Dash-N-Bark
               if [ -f logs/watchdog.pid ]; then kill "$(cat logs/watchdog.pid)" 2>/dev/null || true; fi
+              # The pidfile can be missing or stale, so also stop any other
+              # watchdog and make sure they are gone before starting a new one.
+              # Exact match so a tmux server/session wrapping the watchdog is
+              # not killed along with it.
+              pkill -xf 'bash ./scripts/watchdog.sh' || true
+              for _ in $(seq 1 20); do pgrep -xf 'bash ./scripts/watchdog.sh' > /dev/null || break; sleep 0.5; done
+              pkill -KILL -xf 'bash ./scripts/watchdog.sh' || true
               pkill -f Dash-N-Bark || true
               sleep 20
               unzip -q -o deploy.zip

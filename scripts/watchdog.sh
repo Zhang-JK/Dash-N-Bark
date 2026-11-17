@@ -49,6 +49,7 @@ export LD_LIBRARY_PATH="$ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 child_pid=0
 monitor_pid=0
+sleep_pid=0
 
 # Returns 0 if the file exists and is fresher than HEARTBEAT_STALE_SECS, 1 otherwise.
 heartbeat_fresh() {
@@ -120,7 +121,12 @@ shutdown() {
         done
         kill -KILL "$child_pid" 2>/dev/null || true
     fi
-    rm -f "$PIDFILE"
+    if [ "$sleep_pid" -gt 0 ]; then
+        kill -TERM "$sleep_pid" 2>/dev/null || true
+    fi
+    # A newer watchdog may already own the pidfile; removing it would hide
+    # that watchdog from the next deploy, which then starts a second one.
+    [ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"
     exit 0
 }
 trap shutdown TERM INT HUP
@@ -162,7 +168,12 @@ while true; do
         backoff="$BACKOFF_START"
     fi
     echo "[watchdog] restarting in ${backoff}s"
-    sleep "$backoff"
+    # Sleep in the background so a SIGTERM runs the trap immediately instead
+    # of after the (up to BACKOFF_MAX) foreground sleep finishes.
+    sleep "$backoff" &
+    sleep_pid=$!
+    wait "$sleep_pid"
+    sleep_pid=0
     backoff=$(( backoff * 2 ))
     [ "$backoff" -gt "$BACKOFF_MAX" ] && backoff="$BACKOFF_MAX"
 done
