@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <thread>
 #include <unistd.h>
@@ -135,8 +136,11 @@ namespace {
     }
 
     void crash_handler(int sig, siginfo_t* info, void* /*ucontext*/) {
-        std::error_code ec;
-        std::filesystem::create_directories(CRASH_DIR, ec);
+        // No allocation before the raw backtrace is on disk: a glibc heap
+        // check ("corrupted double-linked list") aborts with the arena lock
+        // held, so any malloc here can block forever. That left an empty
+        // crash file and a hung process on pid 2283643 (2026-11-21 01:10 HKT).
+        ::mkdir(CRASH_DIR, 0755);
         char path[256];
         make_trace_path("crash", path, sizeof(path));
         int fd = ::open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -144,10 +148,18 @@ namespace {
 
         char header[256];
         std::snprintf(header, sizeof(header),
-                      "=== CRASH signal=%d (%s) tid=%d addr=%p ===",
+                      "=== CRASH signal=%d (%s) tid=%d addr=%p ===\n",
                       sig, ::strsignal(sig), static_cast<int>(gettid_compat()),
                       info ? info->si_addr : nullptr);
-        dump_trace_to_fd(fd, header);
+        write_str(fd, header);
+        write_str(fd, "--- raw backtrace ---\n");
+        write_raw_backtrace(fd);
+
+        // std::terminate is already traced by cpptrace's terminate handler,
+        // so SIGABRT is most likely a malloc integrity abort: skip cpptrace.
+        if (sig != SIGABRT) {
+            dump_trace_to_fd(fd, "--- symbolized ---");
+        }
 
         if (fd != STDERR_FILENO) ::close(fd);
 
@@ -257,6 +269,10 @@ namespace CrashHandler {
         try {
             (void)cpptrace::generate_trace(0, 1).to_string();
         } catch (...) {}
+        // The first backtrace() call dlopens libgcc_s, which allocates and
+        // takes the loader lock; do it now so the signal handlers never do.
+        void* warm_frames[1];
+        (void)::backtrace(warm_frames, 1);
 
         // Async-signal: switch to a separate stack so the handler can still
         // run when SIGSEGV was caused by stack overflow. sigaltstack is
